@@ -1,6 +1,6 @@
 /turtlebot4_explorer:
   ros__parameters:
-    min_weight: 0.5
-    min_dist: 1.0
+    min_size: 5
+    min_dist: 2.0
     min_free: 2
     map_path: "/home/mayerfel/ws/explore_ws/map"

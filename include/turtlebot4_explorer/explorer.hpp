@@ -37,17 +37,19 @@ private:
     
     bool isExploring = false;
 
-    geometry_msgs::msg::Point currentGoal;
-    
-    int markerId;
-    
+    Frontier currentGoal;
+
+    std::vector<std::array<double, 4>> aborted;
+        
     std::string map_path;
+
+    bool is_exploring;
 
     int min_free;
 
     double min_dist;
 
-    double min_weight;
+    int min_size;
 
     geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr pose;
 
@@ -61,7 +63,7 @@ private:
 
     bool isAchievableFrontierCell(unsigned int idx, const std::vector<bool> &frontier_flag);
 
-    Frontier buildNewFrontier(unsigned int neighborCell, std::vector<bool> &frontier_flag);
+    Frontier buildNewFrontier(unsigned int neighborCell, std::vector<bool> &frontier_flag, geometry_msgs::msg::Point robot_position);
 
     void explore();
 
