@@ -17,7 +17,7 @@ struct Frontier {
 };
 
 bool compareFrontiers(Frontier& a, Frontier& b) {
-    return a.distance < b.distance;
+    return a.points.size() < b.points.size();
 }
 
 bool isClose(geometry_msgs::msg::Point& a, geometry_msgs::msg::Point& b, double thresh = 0.01) {

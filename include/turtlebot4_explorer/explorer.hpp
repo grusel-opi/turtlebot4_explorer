@@ -12,7 +12,10 @@
 #include "visualization_msgs/msg/marker_array.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
-
+#include "sensor_msgs/msg/laser_scan.hpp"
+#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <tf2_ros/transform_listener.h>
+#include "tf2_ros/buffer.h"
 #include "turtlebot4_explorer/util.hpp"
 
 
@@ -27,9 +30,20 @@ private:
     rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SharedPtr poseNavigator;
 
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr poseSubscription;
+
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr mapSubscription;
+
+    rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scanSubscription;
     
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markerArrayPublisher;
+
+    tf2_ros::Buffer tfBuffer;
+    
+    tf2_ros::TransformListener tfListener;
+
+    geometry_msgs::msg::TransformStamped laser_to_map_transform;
+
+    geometry_msgs::msg::PoseStamped laser_goal_pose;
     
     visualization_msgs::msg::MarkerArray markerArray;
 
@@ -54,6 +68,10 @@ private:
     geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr pose;
 
     std::array<unsigned char, 256> costTranslationTable = initTranslationTable();
+
+    void sendLaserGoal();
+
+    void scanCallback(sensor_msgs::msg::LaserScan::UniquePtr scan);
 
     void mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid);
 

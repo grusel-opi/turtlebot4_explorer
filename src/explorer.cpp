@@ -10,7 +10,9 @@ using namespace std::chrono_literals;
 
 
 Explorer::Explorer()
-: Node("Turtlebot4_explorer")
+: Node("Turtlebot4_explorer"),
+  tfBuffer(this->get_clock()),
+  tfListener(tfBuffer)
 {
     RCLCPP_INFO(get_logger(), "Turtlebot4 explorer startup.");
 
@@ -35,25 +37,27 @@ Explorer::Explorer()
     mapSubscription = create_subscription<nav_msgs::msg::OccupancyGrid>(
             "/map", 10, std::bind(&Explorer::mapCallback, this, std::placeholders::_1));
 
+    // scanSubscription = create_subscription<sensor_msgs::msg::LaserScan>(
+    //         "/scan", 10, std::bind(&Explorer::scanCallback, this, std::placeholders::_1));
+
     markerArrayPublisher = create_publisher<visualization_msgs::msg::MarkerArray>("/frontiers", 10);
     
-    poseNavigator = rclcpp_action::create_client<nav2_msgs::action::NavigateToPose>(
-            this,
-            "/navigate_to_pose");
+    poseNavigator = rclcpp_action::create_client<nav2_msgs::action::NavigateToPose>(this, "/navigate_to_pose");
 
     RCLCPP_INFO(get_logger(), "Turtlebot4 explorer waiting for nav2 stack..");
     poseNavigator->wait_for_action_server();
     RCLCPP_INFO(get_logger(), "Turtlebot4 explorer ready!");
 
     timer = create_wall_timer(
-    5s, [this]() {
+    10s, [this]() {
         explore();
     });
 }
 
 void Explorer::explore() {
 
-    if (!pose) { return; }
+    if (!pose || is_exploring) { return; }
+    is_exploring = true;
 
     RCLCPP_INFO(get_logger(), "exploring..");
 
@@ -82,17 +86,10 @@ void Explorer::explore() {
     send_goal_options.goal_response_callback = std::bind(&Explorer::navigationResponseCallback, this, std::placeholders::_1);
     send_goal_options.result_callback = std::bind(&Explorer::navigationResultCallback, this, std::placeholders::_1);
 
-    if (is_exploring) {
-        RCLCPP_INFO(get_logger(), "found closer goal but previous pending, canceling previous and returning call..");
-        poseNavigator->async_cancel_all_goals();
-        return;
-    }
-
     RCLCPP_INFO(get_logger(), "Sending goal %f,%f", frontiers[0].centroid.x, frontiers[0].centroid.y);
     poseNavigator->async_send_goal(goal, send_goal_options);
 
     currentGoal = frontiers[0];
-    is_exploring = true;
 }
 
 std::vector<Frontier> Explorer::findFrontiers() {
@@ -145,8 +142,6 @@ std::vector<Frontier> Explorer::findFrontiers() {
                 bool already_aborted = false;
                 for (const auto & bb : aborted) {
                     already_aborted = frontierInBB(bb, frontier);
-
-                    // RCLCPP_INFO(get_logger(), "checking: x_min: %f, x_max: %f, y_min: %f, y_max: %f, check: %d", bb[0], bb[1], bb[2], bb[3], already_aborted);
                 }
                 if (!already_aborted &&
                     frontier.distance > min_dist &&
@@ -277,7 +272,82 @@ void Explorer::navigationResultCallback(const rclcpp_action::ClientGoalHandle<na
             RCLCPP_ERROR(get_logger(), "Goal result: Unknown");
             break;
     }
+    // explore();
 }
+
+void Explorer::scanCallback(sensor_msgs::msg::LaserScan::UniquePtr scan) {
+    
+    int max_measurement_idx = 0;
+    float max_measurement = scan->ranges[0];
+    for (int i = 0; i < scan->ranges.size(); i++) {
+        if (scan->ranges[i] > max_measurement) {
+            max_measurement = scan->ranges[i];
+            max_measurement_idx = i;
+        }
+    }
+    double angle = scan->angle_min + max_measurement_idx * scan->angle_increment;
+
+    geometry_msgs::msg::PoseStamped local_laser_goal_pose;
+    local_laser_goal_pose.pose.position.x = std::cos(angle) * -2.0;
+    local_laser_goal_pose.pose.position.y = std::sin(angle) * -2.0;
+    local_laser_goal_pose.pose.orientation.w = 1.0;
+
+    try {
+      
+      laser_to_map_transform = tfBuffer.lookupTransform("map", "rplidar_link", tf2::TimePointZero);
+      tf2::doTransform(local_laser_goal_pose, laser_goal_pose, laser_to_map_transform);
+
+    } catch (tf2::TransformException& ex) {
+      RCLCPP_ERROR(get_logger(), "Couldn't find transform from map to rplidar_link: %s", ex.what());
+    }    
+}
+
+void Explorer::sendLaserGoal() {
+
+    auto goal = nav2_msgs::action::NavigateToPose::Goal();
+    goal.pose.pose.position = laser_goal_pose.pose.position;
+    goal.pose.pose.orientation = laser_goal_pose.pose.orientation;
+    goal.pose.header.frame_id = "map";
+
+    auto send_goal_options = rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SendGoalOptions();
+    // send_goal_options.feedback_callback = std::bind(&Explorer::navigationFeedbackCallback, this, std::placeholders::_1, std::placeholders::_2);
+    // send_goal_options.goal_response_callback = std::bind(&Explorer::navigationResponseCallback, this, std::placeholders::_1);
+    // send_goal_options.result_callback = std::bind(&Explorer::navigationResultCallback, this, std::placeholders::_1);
+
+    RCLCPP_INFO(get_logger(), "Sending goal %f,%f", goal.pose.pose.position.x, goal.pose.pose.position.y);
+    poseNavigator->async_send_goal(goal, send_goal_options);
+
+
+    clearMarkers();
+
+    std_msgs::msg::ColorRGBA color;
+
+    color.r = 1.0;
+    color.g = 0;
+    color.b = 0;
+    color.a = 1.0;
+
+    std::vector<visualization_msgs::msg::Marker> &markers = markerArray.markers;
+    visualization_msgs::msg::Marker m;
+
+    m.header.frame_id = "map";
+    m.header.stamp = this->now();
+    m.frame_locked = true;
+
+    m.action = visualization_msgs::msg::Marker::ADD;
+    m.ns = "frontiers";
+    m.id = 0;
+    m.type = visualization_msgs::msg::Marker::SPHERE;
+    m.pose.position = goal.pose.pose.position;
+    m.scale.x = 0.3;
+    m.scale.y = 0.3;
+    m.scale.z = 0.3;
+    m.color = color;
+    markers.push_back(m);
+    markerArrayPublisher->publish(markerArray);
+
+}
+
 
 void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid) {
 
@@ -296,6 +366,7 @@ void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid
         auto cell_cost = static_cast<unsigned char>(occupancyGrid->data[i]);
         costmap_data[i] = costTranslationTable[cell_cost];
     }
+    // explore();
 }
 
 void Explorer::poseCallback(geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr poseMsg) {
