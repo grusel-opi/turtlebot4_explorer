@@ -17,6 +17,8 @@
 #include <tf2_ros/transform_listener.h>
 #include "tf2_ros/buffer.h"
 #include "turtlebot4_explorer/util.hpp"
+#include "irobot_create_msgs/action/undock.hpp"
+#include "irobot_create_msgs/action/dock.hpp"
 
 
 class Explorer : public rclcpp::Node {
@@ -29,6 +31,9 @@ private:
 
     rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SharedPtr poseNavigator;
 
+    rclcpp_action::Client<irobot_create_msgs::action::Undock>::SharedPtr undockClient;
+    rclcpp_action::Client<irobot_create_msgs::action::Dock>::SharedPtr dockClient;
+
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr poseSubscription;
 
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr mapSubscription;
@@ -36,6 +41,8 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scanSubscription;
     
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markerArrayPublisher;
+
+    std::vector<Frontier> frontiers_;
 
     tf2_ros::Buffer tfBuffer;
     
@@ -51,7 +58,7 @@ private:
     
     bool isExploring = false;
 
-    Frontier currentGoal;
+    std::array<double, 4> currentGoalArea;
 
     std::vector<std::array<double, 4>> aborted;
         
@@ -69,6 +76,8 @@ private:
 
     std::array<unsigned char, 256> costTranslationTable = initTranslationTable();
 
+    void start(const rclcpp_action::ClientGoalHandle<irobot_create_msgs::action::Undock>::WrappedResult &result);
+
     void sendLaserGoal();
 
     void scanCallback(sensor_msgs::msg::LaserScan::UniquePtr scan);
@@ -77,7 +86,7 @@ private:
 
     void poseCallback(geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr pose);
 
-    std::vector<Frontier> findFrontiers();
+    void findFrontiers();
 
     bool isAchievableFrontierCell(unsigned int idx, const std::vector<bool> &frontier_flag);
 

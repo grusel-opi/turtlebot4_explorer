@@ -20,7 +20,7 @@ bool compareFrontiers(Frontier& a, Frontier& b) {
     return a.points.size() < b.points.size();
 }
 
-bool isClose(geometry_msgs::msg::Point& a, geometry_msgs::msg::Point& b, double thresh = 0.01) {
+bool isClose(geometry_msgs::msg::Point& a, geometry_msgs::msg::Point& b, double thresh = 0.05) {
     double dx = a.x - b.x;
     double dy = a.y - b.y;
     if (std::sqrt(dx*dx + dy*dy) <= thresh) {
@@ -39,6 +39,17 @@ std::array<double, 4> frontierToBB(Frontier& frontier) {
         if (p.y > y_max) y_max = p.y;
     }
     return {x_min, x_max, y_min, y_max};
+}
+
+bool pointInBB(const std::array<double, 4>& bb, geometry_msgs::msg::Point& centroid) {
+    double x_min = bb[0], x_max = bb[1], y_min = bb[2], y_max = bb[3];
+    if (centroid.x > x_min && centroid.x < x_max &&
+        centroid.y > y_min && centroid.y < y_max)
+    {
+            return true;
+    } else {
+        return false;
+    }
 }
 
 bool frontierInBB(const std::array<double, 4>& bb, Frontier& frontier) {

@@ -17,18 +17,15 @@ Explorer::Explorer()
     RCLCPP_INFO(get_logger(), "Turtlebot4 explorer startup.");
 
     declare_parameter("map_path", rclcpp::ParameterValue(std::string("~")));
-    declare_parameter("min_free", rclcpp::ParameterValue(2));
     declare_parameter("min_dist", rclcpp::ParameterValue(1.0));
     declare_parameter("min_size", rclcpp::ParameterValue(5));
 
     get_parameter("min_size", min_size);
     get_parameter("min_dist", min_dist);
-    get_parameter("min_free", min_free);
     get_parameter("map_path", map_path);
 
     RCLCPP_INFO(get_logger(), "min_size: %d", min_size);
     RCLCPP_INFO(get_logger(), "min_dist: %f", min_dist);
-    RCLCPP_INFO(get_logger(), "min_free: %d", min_free);
     RCLCPP_INFO(get_logger(), "map_path: %s", map_path.c_str());
 
     poseSubscription = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
@@ -37,47 +34,64 @@ Explorer::Explorer()
     mapSubscription = create_subscription<nav_msgs::msg::OccupancyGrid>(
             "/map", 10, std::bind(&Explorer::mapCallback, this, std::placeholders::_1));
 
-    // scanSubscription = create_subscription<sensor_msgs::msg::LaserScan>(
-    //         "/scan", 10, std::bind(&Explorer::scanCallback, this, std::placeholders::_1));
-
     markerArrayPublisher = create_publisher<visualization_msgs::msg::MarkerArray>("/frontiers", 10);
     
     poseNavigator = rclcpp_action::create_client<nav2_msgs::action::NavigateToPose>(this, "/navigate_to_pose");
 
+    undockClient = rclcpp_action::create_client<irobot_create_msgs::action::Undock>(this, "/undock");
+    dockClient = rclcpp_action::create_client<irobot_create_msgs::action::Dock>(this, "/dock");
+
     RCLCPP_INFO(get_logger(), "Turtlebot4 explorer waiting for nav2 stack..");
     poseNavigator->wait_for_action_server();
-    RCLCPP_INFO(get_logger(), "Turtlebot4 explorer ready!");
+    RCLCPP_INFO(get_logger(), "Waiting for undock action server..");
+
+    undockClient->wait_for_action_server();
+    auto undockGoal = irobot_create_msgs::action::Undock::Goal();
+    auto undockGoalOptions = rclcpp_action::Client<irobot_create_msgs::action::Undock>::SendGoalOptions();
+    // undockGoalOptions.result_callback = std::bind(&Explorer::start, this, std::placeholders::_1);
+
+    RCLCPP_INFO(get_logger(), "Sending undock command.");
+    undockClient->async_send_goal(undockGoal, undockGoalOptions);
 
     timer = create_wall_timer(
     10s, [this]() {
-        explore();
+        checkGoal();
     });
 }
 
-void Explorer::explore() {
+void Explorer::start(const rclcpp_action::ClientGoalHandle<irobot_create_msgs::action::Undock>::WrappedResult &result) {
+    RCLCPP_INFO(get_logger(), "start: creating check goal timer.");
+    timer = create_wall_timer(
+    10s, [this]() {
+        checkGoal();
+    });
+}
 
-    if (!pose || is_exploring) { return; }
-    is_exploring = true;
+void Explorer::checkGoal() {
+    RCLCPP_INFO(get_logger(), "checking goal.");
 
-    RCLCPP_INFO(get_logger(), "exploring..");
-
-    auto frontiers = findFrontiers();
-    if (frontiers.empty()) {
-        RCLCPP_WARN(get_logger(), "No frontier found!");
-        // stop();
+    if (!pose) {
+        RCLCPP_INFO(get_logger(), "no pose received yet.");
         return;
     }
 
-    RCLCPP_INFO(get_logger(), "frontiers:");
-    for (int i = 0; i < 3; i++) {
-        auto newbb = frontierToBB(frontiers[i]);
-        RCLCPP_INFO(get_logger(), "bb: x_min: %f, x_max: %f, y_min: %f, y_max: %f, dist: %f", newbb[0], newbb[1], newbb[2], newbb[3], frontiers[i].distance);
+    findFrontiers();
+
+    if (frontiers_.size() == 0) {
+        RCLCPP_WARN(get_logger(), "No frontier found!");
+        return;
     }
 
-    drawMarkers(frontiers);
+    if (pointInBB(currentGoalArea, frontiers_[0].centroid)) {
+        RCLCPP_INFO(get_logger(), "Best frontier is already goal.");
+        return;
+    }
+
+    RCLCPP_INFO(get_logger(), "Best frontier is outside current goal area, canceling old and sending new goal.");
+    auto future_cancel = poseNavigator->async_cancel_all_goals();
 
     auto goal = nav2_msgs::action::NavigateToPose::Goal();
-    goal.pose.pose.position = frontiers[0].centroid;
+    goal.pose.pose.position = frontiers_[0].centroid;
     goal.pose.pose.orientation.w = 1.;
     goal.pose.header.frame_id = "map";
 
@@ -86,20 +100,61 @@ void Explorer::explore() {
     send_goal_options.goal_response_callback = std::bind(&Explorer::navigationResponseCallback, this, std::placeholders::_1);
     send_goal_options.result_callback = std::bind(&Explorer::navigationResultCallback, this, std::placeholders::_1);
 
-    RCLCPP_INFO(get_logger(), "Sending goal %f,%f", frontiers[0].centroid.x, frontiers[0].centroid.y);
+    RCLCPP_INFO(get_logger(), "Sending goal %f,%f", frontiers_[0].centroid.x, frontiers_[0].centroid.y);
     poseNavigator->async_send_goal(goal, send_goal_options);
 
-    currentGoal = frontiers[0];
+    currentGoalArea = frontierToBB(frontiers_[0]);
+
+} 
+
+void Explorer::explore() {
+
+    // if (!pose || is_exploring) { return; }
+    // is_exploring = true;
+
+    // RCLCPP_INFO(get_logger(), "exploring..");
+
+    // auto frontiers = findFrontiers();
+    // if (frontiers.empty()) {
+    //     RCLCPP_WARN(get_logger(), "No frontier found!");
+    //     // stop();
+    //     return;
+    // }
+
+    // RCLCPP_INFO(get_logger(), "frontiers:");
+    // for (int i = 0; i < 3; i++) {
+    //     auto newbb = frontierToBB(frontiers[i]);
+    //     RCLCPP_INFO(get_logger(), "bb: x_min: %f, x_max: %f, y_min: %f, y_max: %f, size: %ld", newbb[0], newbb[1], newbb[2], newbb[3], frontiers[i].points.size());
+    // }
+
+    // drawMarkers(frontiers);
+
+    // auto goal = nav2_msgs::action::NavigateToPose::Goal();
+    // goal.pose.pose.position = frontiers[0].centroid;
+    // goal.pose.pose.orientation.w = 1.;
+    // goal.pose.header.frame_id = "map";
+
+    // auto send_goal_options = rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SendGoalOptions();
+    // // send_goal_options.feedback_callback = std::bind(&Explorer::navigationFeedbackCallback, this, std::placeholders::_1, std::placeholders::_2);
+    // send_goal_options.goal_response_callback = std::bind(&Explorer::navigationResponseCallback, this, std::placeholders::_1);
+    // send_goal_options.result_callback = std::bind(&Explorer::navigationResultCallback, this, std::placeholders::_1);
+
+    // RCLCPP_INFO(get_logger(), "Sending goal %f,%f", frontiers[0].centroid.x, frontiers[0].centroid.y);
+    // poseNavigator->async_send_goal(goal, send_goal_options);
+
+    // currentGoalArea = frontierToBB(frontiers[0]);
 }
 
-std::vector<Frontier> Explorer::findFrontiers() {
-    std::vector<Frontier> frontier_list;
+void Explorer::findFrontiers() {
+
+    frontiers_.clear();
+    
     const auto position = pose->pose.pose.position;
     unsigned int mx, my;
 
     if (!costmap.worldToMap(position.x, position.y, mx, my)) {
         RCLCPP_ERROR(get_logger(), "Robot out of costmap bounds, cannot search for frontiers");
-        return frontier_list;
+        return;
     }
 
     std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap.getMutex()));
@@ -129,6 +184,7 @@ std::vector<Frontier> Explorer::findFrontiers() {
         bfs.pop();
 
         for(unsigned nbr : nhood4(idx, costmap)) {
+        cont:
 
             if (map[nbr] <= map[idx] && !visited_flag[nbr]) {
                 visited_flag[nbr] = true;
@@ -139,24 +195,24 @@ std::vector<Frontier> Explorer::findFrontiers() {
 
                 Frontier frontier = buildNewFrontier(nbr, frontier_flag, position);
 
-                bool already_aborted = false;
                 for (const auto & bb : aborted) {
-                    already_aborted = frontierInBB(bb, frontier);
+                    if(pointInBB(bb, frontier.centroid)) {
+                        goto cont;
+                    }
                 }
-                if (!already_aborted &&
-                    frontier.distance > min_dist &&
-                    frontier.points.size() > min_size &&
-                    !isClose(frontier.centroid, currentGoal.centroid))
+                if (frontier.distance > min_dist &&
+                    frontier.points.size() > min_size)
                 {
-                    frontier_list.push_back(frontier);
+                    frontiers_.push_back(frontier);
                 }
             }
         }
     }
 
-    std::sort (frontier_list.begin(), frontier_list.end(), compareFrontiers);
+    std::sort (frontiers_.begin(), frontiers_.end(), compareFrontiers);
 
-    return frontier_list;
+    drawMarkers(frontiers_);
+
 }
 
 Frontier Explorer::buildNewFrontier(unsigned int neighborCell, std::vector<bool> &frontier_flag, geometry_msgs::msg::Point robot_position) {
@@ -256,14 +312,14 @@ void Explorer::navigationFeedbackCallback(
 }
 
 void Explorer::navigationResultCallback(const rclcpp_action::ClientGoalHandle<nav2_msgs::action::NavigateToPose>::WrappedResult &result) {
-    is_exploring = false;
+    // is_exploring = false;
     switch (result.code) {
         case rclcpp_action::ResultCode::SUCCEEDED:
             RCLCPP_INFO(get_logger(), "Goal result: reached");
             break;
         case rclcpp_action::ResultCode::ABORTED:
             RCLCPP_ERROR(get_logger(), "Goal result: aborted, marking as unreachable.");
-            aborted.push_back(frontierToBB(currentGoal));
+            aborted.push_back(currentGoalArea);
             break;
         case rclcpp_action::ResultCode::CANCELED:
             RCLCPP_ERROR(get_logger(), "Goal result: canceled");
@@ -272,82 +328,7 @@ void Explorer::navigationResultCallback(const rclcpp_action::ClientGoalHandle<na
             RCLCPP_ERROR(get_logger(), "Goal result: Unknown");
             break;
     }
-    // explore();
 }
-
-void Explorer::scanCallback(sensor_msgs::msg::LaserScan::UniquePtr scan) {
-    
-    int max_measurement_idx = 0;
-    float max_measurement = scan->ranges[0];
-    for (int i = 0; i < scan->ranges.size(); i++) {
-        if (scan->ranges[i] > max_measurement) {
-            max_measurement = scan->ranges[i];
-            max_measurement_idx = i;
-        }
-    }
-    double angle = scan->angle_min + max_measurement_idx * scan->angle_increment;
-
-    geometry_msgs::msg::PoseStamped local_laser_goal_pose;
-    local_laser_goal_pose.pose.position.x = std::cos(angle) * -2.0;
-    local_laser_goal_pose.pose.position.y = std::sin(angle) * -2.0;
-    local_laser_goal_pose.pose.orientation.w = 1.0;
-
-    try {
-      
-      laser_to_map_transform = tfBuffer.lookupTransform("map", "rplidar_link", tf2::TimePointZero);
-      tf2::doTransform(local_laser_goal_pose, laser_goal_pose, laser_to_map_transform);
-
-    } catch (tf2::TransformException& ex) {
-      RCLCPP_ERROR(get_logger(), "Couldn't find transform from map to rplidar_link: %s", ex.what());
-    }    
-}
-
-void Explorer::sendLaserGoal() {
-
-    auto goal = nav2_msgs::action::NavigateToPose::Goal();
-    goal.pose.pose.position = laser_goal_pose.pose.position;
-    goal.pose.pose.orientation = laser_goal_pose.pose.orientation;
-    goal.pose.header.frame_id = "map";
-
-    auto send_goal_options = rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SendGoalOptions();
-    // send_goal_options.feedback_callback = std::bind(&Explorer::navigationFeedbackCallback, this, std::placeholders::_1, std::placeholders::_2);
-    // send_goal_options.goal_response_callback = std::bind(&Explorer::navigationResponseCallback, this, std::placeholders::_1);
-    // send_goal_options.result_callback = std::bind(&Explorer::navigationResultCallback, this, std::placeholders::_1);
-
-    RCLCPP_INFO(get_logger(), "Sending goal %f,%f", goal.pose.pose.position.x, goal.pose.pose.position.y);
-    poseNavigator->async_send_goal(goal, send_goal_options);
-
-
-    clearMarkers();
-
-    std_msgs::msg::ColorRGBA color;
-
-    color.r = 1.0;
-    color.g = 0;
-    color.b = 0;
-    color.a = 1.0;
-
-    std::vector<visualization_msgs::msg::Marker> &markers = markerArray.markers;
-    visualization_msgs::msg::Marker m;
-
-    m.header.frame_id = "map";
-    m.header.stamp = this->now();
-    m.frame_locked = true;
-
-    m.action = visualization_msgs::msg::Marker::ADD;
-    m.ns = "frontiers";
-    m.id = 0;
-    m.type = visualization_msgs::msg::Marker::SPHERE;
-    m.pose.position = goal.pose.pose.position;
-    m.scale.x = 0.3;
-    m.scale.y = 0.3;
-    m.scale.z = 0.3;
-    m.color = color;
-    markers.push_back(m);
-    markerArrayPublisher->publish(markerArray);
-
-}
-
 
 void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid) {
 
@@ -366,7 +347,6 @@ void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid
         auto cell_cost = static_cast<unsigned char>(occupancyGrid->data[i]);
         costmap_data[i] = costTranslationTable[cell_cost];
     }
-    // explore();
 }
 
 void Explorer::poseCallback(geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr poseMsg) {

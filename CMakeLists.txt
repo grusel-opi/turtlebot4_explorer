@@ -24,7 +24,8 @@ set(deps
         std_msgs
         angles
         tf2_geometry_msgs
-        map_msgs)
+        map_msgs
+        irobot_create_msgs)
 
 set(targets
         explorer)
