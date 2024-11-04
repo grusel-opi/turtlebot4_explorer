@@ -25,64 +25,61 @@ class Explorer : public rclcpp::Node {
 public:
     Explorer();
 
+    using NavAction = nav2_msgs::action::NavigateToPose;
+    using NavClient = rclcpp_action::Client<NavAction>;
+
+    using UndockAction = irobot_create_msgs::action::Undock;    
+    using UndockClient = rclcpp_action::Client<UndockAction>;
+    using DockAction = irobot_create_msgs::action::Dock;
+    using DockClient = rclcpp_action::Client<DockAction>;
+
+    void start();
+
 private:
 
-    nav2_costmap_2d::Costmap2D costmap;
+    NavClient::SharedPtr pose_navigator_;
 
-    rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SharedPtr poseNavigator;
+    std::shared_future<rclcpp_action::ClientGoalHandle<NavAction>::SharedPtr> future_goal_handle_;
 
-    rclcpp_action::Client<irobot_create_msgs::action::Undock>::SharedPtr undockClient;
-    rclcpp_action::Client<irobot_create_msgs::action::Dock>::SharedPtr dockClient;
+    UndockClient::SharedPtr undock_client_;
 
-    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr poseSubscription;
+    DockClient::SharedPtr dock_client_;
 
-    rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr mapSubscription;
+    rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_subscription_;
 
-    rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scanSubscription;
-    
-    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr markerArrayPublisher;
+    rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_subscription_;
+
+    nav2_costmap_2d::Costmap2D costmap_;
+
+    rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_array_publisher_;
 
     std::vector<Frontier> frontiers_;
 
-    tf2_ros::Buffer tfBuffer;
+    GoalStatus current_goal_status_;
     
-    tf2_ros::TransformListener tfListener;
-
-    geometry_msgs::msg::TransformStamped laser_to_map_transform;
-
-    geometry_msgs::msg::PoseStamped laser_goal_pose;
+    Frontier current_goal_;
     
-    visualization_msgs::msg::MarkerArray markerArray;
+    visualization_msgs::msg::MarkerArray marker_array;
 
-    rclcpp::TimerBase::SharedPtr timer;
+    double loop_rate_;
     
-    bool isExploring = false;
-
-    std::array<double, 4> currentGoalArea;
-
-    std::vector<std::array<double, 4>> aborted;
+    std::vector<std::array<double, 4>> aborted_;
         
-    std::string map_path;
+    std::string map_path_;
 
-    bool is_exploring;
+    bool is_exploring_;
 
-    int min_free;
+    int min_free_;
 
-    double min_dist;
+    double min_dist_;
 
-    int min_size;
+    int min_size_;
 
-    geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr pose;
+    geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr pose_;
 
-    std::array<unsigned char, 256> costTranslationTable = initTranslationTable();
+    std::array<unsigned char, 256> cost_translation_table_;
 
-    void start(const rclcpp_action::ClientGoalHandle<irobot_create_msgs::action::Undock>::WrappedResult &result);
-
-    void sendLaserGoal();
-
-    void scanCallback(sensor_msgs::msg::LaserScan::UniquePtr scan);
-
-    void mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid);
+    void mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancy_grid);
 
     void poseCallback(geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr pose);
 
@@ -90,7 +87,7 @@ private:
 
     bool isAchievableFrontierCell(unsigned int idx, const std::vector<bool> &frontier_flag);
 
-    Frontier buildNewFrontier(unsigned int neighborCell, std::vector<bool> &frontier_flag, geometry_msgs::msg::Point robot_position);
+    Frontier buildNewFrontier(unsigned int neighbor_cell, std::vector<bool> &frontier_flag, geometry_msgs::msg::Point robot_position);
 
     void explore();
 
@@ -108,7 +105,7 @@ private:
 
     void navigationResponseCallback(const rclcpp_action::ClientGoalHandle<nav2_msgs::action::NavigateToPose>::SharedPtr &goal_handle);
 
-    void checkGoal();
+    bool checkGoal();
 };
 
 #endif

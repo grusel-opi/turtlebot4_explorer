@@ -10,6 +10,20 @@
 #include "geometry_msgs/msg/point.hpp"
 
 
+enum class ActionStatus
+{
+  IDLE = 0,
+  PROCESSING = 1,
+  FAILED = 2,
+  SUCCEEDED = 3
+};
+
+struct GoalStatus
+{
+  ActionStatus status;
+  int error_code;
+};
+
 struct Frontier {
     geometry_msgs::msg::Point centroid;
     std::vector<geometry_msgs::msg::Point> points;
@@ -17,7 +31,7 @@ struct Frontier {
 };
 
 bool compareFrontiers(Frontier& a, Frontier& b) {
-    return a.points.size() < b.points.size();
+    return a.distance < b.distance;
 }
 
 bool isClose(geometry_msgs::msg::Point& a, geometry_msgs::msg::Point& b, double thresh = 0.05) {
@@ -164,16 +178,14 @@ bool nearestCell(unsigned int &result, unsigned int start, unsigned char val, co
     return false;
 }
 
+// Translation OccupancyGrid to Costmap2D
 static std::array<unsigned char, 256> initTranslationTable() {
     std::array<unsigned char, 256> cost_translation_table{};
 
-    // lineary mapped from [0..100] to [0..255]
     for (std::size_t i = 0; i < 256; ++i) {
-        cost_translation_table[i] =
-                static_cast<unsigned char>(1 + (251 * (i - 1)) / 97);
+        cost_translation_table[i] = static_cast<unsigned char>(1 + (251 * (i - 1)) / 97);
     }
 
-    // special values:
     cost_translation_table[0] = nav2_costmap_2d::FREE_SPACE;
     cost_translation_table[99] = 253;
     cost_translation_table[100] = nav2_costmap_2d::LETHAL_OBSTACLE;
