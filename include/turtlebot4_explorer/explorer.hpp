@@ -77,6 +77,8 @@ private:
 
     geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr pose_;
 
+    geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr start_pose_;
+
     std::array<unsigned char, 256> cost_translation_table_;
 
     void mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancy_grid);

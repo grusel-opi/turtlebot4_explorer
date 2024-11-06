@@ -17,16 +17,13 @@ Explorer::Explorer()
     declare_parameter("map_path", rclcpp::ParameterValue(std::string("~")));
     declare_parameter("min_dist", rclcpp::ParameterValue(1.0));
     declare_parameter("min_size", rclcpp::ParameterValue(5));
-    declare_parameter("loop_rate", rclcpp::ParameterValue(0.1));
 
     get_parameter("min_size", min_size_);
     get_parameter("min_dist", min_dist_);
     get_parameter("map_path", map_path_);
-    get_parameter("loop_rate", loop_rate_);
 
     RCLCPP_INFO(get_logger(), "min_size: %d", min_size_);
     RCLCPP_INFO(get_logger(), "min_dist: %f", min_dist_);
-    RCLCPP_INFO(get_logger(), "loop_rate: %f", loop_rate_);
     RCLCPP_INFO(get_logger(), "map_path: %s", map_path_.c_str());
 
     pose_navigator_ = rclcpp_action::create_client<NavAction>(this, "/navigate_to_pose");
@@ -44,6 +41,8 @@ Explorer::Explorer()
 
     cost_translation_table_ = initTranslationTable();
 
+    start_pose_ = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
+
     current_goal_status_.status = ActionStatus::IDLE;
 }
 
@@ -55,12 +54,6 @@ void Explorer::start() {
     RCLCPP_INFO(get_logger(), "Waiting for undock action server..");
     undock_client_->wait_for_action_server();
 
-    RCLCPP_INFO(get_logger(), "Sending undock command.");
-    auto undock_goal = UndockAction::Goal();
-    auto undock_goal_options = UndockClient::SendGoalOptions();
-    undock_goal_options.result_callback = [this](const auto msg){ RCLCPP_INFO(get_logger(), "Undocking result: is_docked: %d", msg.result->is_docked);};
-    undock_client_->async_send_goal(undock_goal, undock_goal_options);
-
     rclcpp::WallRate wait_for_pose_rate(1);
     while (rclcpp::ok() && !pose_) {
         RCLCPP_INFO(get_logger(), "Waiting to receive pose message..");
@@ -68,65 +61,56 @@ void Explorer::start() {
         wait_for_pose_rate.sleep();
     }
 
-    RCLCPP_INFO(get_logger(), "Starting exploration loop.");
+    // lets not do automatic docking and undocking since these maneuvers are very rough (distorting the map) and not modifiable (thx irobot people)
+
+    // RCLCPP_INFO(get_logger(), "Sending undock command.");
+    // auto undock_goal = UndockAction::Goal();
+    // auto undock_goal_options = UndockClient::SendGoalOptions();
+    // undock_goal_options.result_callback = [this](const auto msg){ RCLCPP_INFO(get_logger(), "Undocking result: is_docked: %d", msg.result->is_docked);};
+    // auto undock_future = undock_client_->async_send_goal(undock_goal, undock_goal_options);
+
+    // rclcpp::spin_until_future_complete(shared_from_this(), undock_future);
+    // rclcpp::spin_some(shared_from_this());
+
+    RCLCPP_INFO(get_logger(), "Remembering start pose.");
+    start_pose_->pose.pose.position = pose_->pose.pose.position;
+    start_pose_->pose.pose.orientation = pose_->pose.pose.orientation;
+
+    RCLCPP_INFO(get_logger(), "Starting exploration!");
     explore();
 }
 
 void Explorer::explore() {
 
-    rclcpp::WallRate r(loop_rate_);
+    findFrontiers();
 
-    while (rclcpp::ok()) {
-
-        RCLCPP_INFO(get_logger(), "[LOOP] Finding frontiers.");
-        findFrontiers();
-
-        if (frontiers_.size() == 0) {
-            RCLCPP_WARN(get_logger(), "[LOOP] No frontier found!");
-            return;
-        }
-
-        if (current_goal_status_.status == ActionStatus::PROCESSING) {
-            if (checkGoal()) {
-                RCLCPP_INFO(get_logger(), "[LOOP] Best frontier is already goal.");
-                rclcpp::spin_some(shared_from_this());
-                r.sleep();
-                continue;
-            } else {
-                RCLCPP_INFO(get_logger(), "[LOOP] Frontier got discovered, canceling goal.");
-                auto cancel_future = pose_navigator_->async_cancel_all_goals();
-                rclcpp::spin_until_future_complete(shared_from_this(), cancel_future);
-                rclcpp::spin_some(shared_from_this());
-                RCLCPP_INFO(get_logger(), "[LOOP] Result for old goal should be received now: ");
-            }
-        }
-
-        auto goal = nav2_msgs::action::NavigateToPose::Goal();
-        goal.pose.pose.position = frontiers_[0].centroid;
-        goal.pose.pose.orientation.w = 1.;
-        goal.pose.header.frame_id = "map";
-
-        auto send_goal_options = NavClient::SendGoalOptions();
-        // send_goal_options.feedback_callback = std::bind(&Explorer::navigationFeedbackCallback, this, std::placeholders::_1, std::placeholders::_2);
-        send_goal_options.goal_response_callback = std::bind(&Explorer::navigationResponseCallback, this, std::placeholders::_1);
-        send_goal_options.result_callback = std::bind(&Explorer::navigationResultCallback, this, std::placeholders::_1);
-
-        RCLCPP_INFO(get_logger(), "[LOOP] Sending goal %f,%f", frontiers_[0].centroid.x, frontiers_[0].centroid.y);
-        future_goal_handle_ = pose_navigator_->async_send_goal(goal, send_goal_options);
-        current_goal_status_.status = ActionStatus::PROCESSING;
-        current_goal_ = frontiers_[0];
-
-        rclcpp::spin_until_future_complete(shared_from_this(), future_goal_handle_);
-        rclcpp::spin_some(shared_from_this());
-
-        r.sleep();
+    if (frontiers_.size() == 0) {
+        RCLCPP_WARN(get_logger(), "No frontier found!");
+        stop();
+        return;
     }
+
+    auto goal = nav2_msgs::action::NavigateToPose::Goal();
+    goal.pose.pose.position = frontiers_[0].centroid;
+    goal.pose.pose.orientation.w = 1.;
+    goal.pose.header.frame_id = "map";
+
+    auto send_goal_options = NavClient::SendGoalOptions();
+    // send_goal_options.feedback_callback = std::bind(&Explorer::navigationFeedbackCallback, this, std::placeholders::_1, std::placeholders::_2);
+    send_goal_options.goal_response_callback = std::bind(&Explorer::navigationResponseCallback, this, std::placeholders::_1);
+    send_goal_options.result_callback = std::bind(&Explorer::navigationResultCallback, this, std::placeholders::_1);
+
+    RCLCPP_INFO(get_logger(), "Sending goal %f,%f", frontiers_[0].centroid.x, frontiers_[0].centroid.y);
+    future_goal_handle_ = pose_navigator_->async_send_goal(goal, send_goal_options);
+    current_goal_status_.status = ActionStatus::PROCESSING;
+    current_goal_ = frontiers_[0];
 } 
 
 bool Explorer::checkGoal() {
 
     unsigned int mx, my, free_count = 0;
     unsigned char *costmap_data = costmap_.getCharMap();
+    const int thresh = 5;
 
     for (const auto & p : current_goal_.points) {
         if (!costmap_.worldToMap(p.x, p.y, mx, my)) {
@@ -135,7 +119,7 @@ bool Explorer::checkGoal() {
         }
         unsigned int pos = costmap_.getIndex(mx, my);
         if (costmap_data[pos] == nav2_costmap_2d::NO_INFORMATION) {
-            if (++free_count > min_size_) {
+            if (++free_count > thresh) {
                 return true;
             }
         }
@@ -182,7 +166,6 @@ void Explorer::findFrontiers() {
         bfs.pop();
 
         for(unsigned nbr : nhood4(idx, costmap_)) {
-        cont:
 
             if (map[nbr] <= map[idx] && !visited_flag[nbr]) {
                 visited_flag[nbr] = true;
@@ -192,13 +175,16 @@ void Explorer::findFrontiers() {
                 frontier_flag[nbr] = true;
 
                 Frontier frontier = buildNewFrontier(nbr, frontier_flag, position);
-
+                bool aborted = false;
                 for (const auto & bb : aborted_) {
                     if(pointInBB(bb, frontier.centroid)) {
-                        goto cont;
+                        RCLCPP_ERROR(get_logger(), "abort check: (%f, %f) is in area %f - %f, %f - %f", frontier.centroid.x, frontier.centroid.y, bb[0], bb[1], bb[2], bb[3]);
+                        aborted = true;
+                        break;
                     }
                 }
-                if (frontier.distance > min_dist_ &&
+                if (!aborted &&
+                    frontier.distance > min_dist_ &&
                     frontier.points.size() > min_size_)
                 {
                     frontiers_.push_back(frontier);
@@ -301,6 +287,7 @@ void Explorer::navigationResponseCallback(
     } else {
         RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
         current_goal_status_.status = ActionStatus::FAILED;
+        explore();
     }
 }
 
@@ -321,22 +308,26 @@ void Explorer::navigationResultCallback(const rclcpp_action::ClientGoalHandle<na
     switch (result.code) {
         case rclcpp_action::ResultCode::SUCCEEDED:
             current_goal_status_.status = ActionStatus::SUCCEEDED;
-            RCLCPP_INFO(get_logger(), "[RESULT] Goal result: reached");
+            RCLCPP_INFO(get_logger(), "[RESULT] Goal result: reached. Still unexplored: %d", checkGoal());
             break;
         case rclcpp_action::ResultCode::ABORTED:
             current_goal_status_.status = ActionStatus::FAILED;
             // current_goal_status_.error_code = result.result.error_code;
-            RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: aborted, marking as unreachable.");
-            aborted_.push_back(frontierToBB(current_goal_));
+            {
+                auto bb = frontierToBB(current_goal_, costmap_.getResolution());
+                RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: aborted, marking as unreachable: x:%f-%f, y: %f-%f Still unexplored: %d", bb[0], bb[1], bb[2], bb[3], checkGoal());
+                aborted_.push_back(bb);
+            }
             break;
         case rclcpp_action::ResultCode::CANCELED:
             current_goal_status_.status = ActionStatus::FAILED;
-            RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: canceled");
+            RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: canceled. Still unexplored: %d", checkGoal());
             break;
         default:
             RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: Unknown");
             break;
     }
+    explore();
 }
 
 void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid) {
@@ -417,13 +408,71 @@ void Explorer::clearMarkers() {
 
 
 void Explorer::stop() {
-    RCLCPP_INFO(get_logger(), "Explorer stopped..");
-    
-    pose_subscription_.reset();
-    map_subscription_.reset();
-    pose_navigator_->async_cancel_all_goals();
-    saveMap();
-    clearMarkers();
+    RCLCPP_INFO(get_logger(), "Explorer stopped, returning to start pose.");
+
+    auto goal = nav2_msgs::action::NavigateToPose::Goal();
+    goal.pose.pose.position = start_pose_->pose.pose.position;
+    goal.pose.pose.orientation = start_pose_->pose.pose.orientation;
+    goal.pose.header.frame_id = "map";
+
+    auto send_goal_options = NavClient::SendGoalOptions();
+    send_goal_options.goal_response_callback = [this](const auto msg) {
+        if (msg) {
+            RCLCPP_INFO(get_logger(), "Return to start goal accepted by server.");
+        } else {
+            RCLCPP_ERROR(get_logger(), "Return to start goal was rejected by server.");
+        }
+    };
+   
+    send_goal_options.result_callback = [this](const auto result) {
+        switch (result.code) {
+        case rclcpp_action::ResultCode::SUCCEEDED:
+            RCLCPP_INFO(get_logger(), "Return to start goal result: reached.");
+
+            // {
+            //     RCLCPP_INFO(get_logger(), "Waiting for dock action server..");
+            //     dock_client_->wait_for_action_server();
+
+            //     RCLCPP_INFO(get_logger(), "Sending dock command.");
+            //     auto dock_goal = DockAction::Goal();
+            //     auto dock_goal_options = DockClient::SendGoalOptions();
+            //     dock_goal_options.result_callback = [this](const auto msg) {
+            //         RCLCPP_INFO(get_logger(), "Docking result: is_docked: %d", msg.result->is_docked);
+            //         RCLCPP_INFO(get_logger(), "Should be docked now, stopping and saving map.");
+
+            //         pose_subscription_.reset();
+            //         map_subscription_.reset();
+            //         pose_navigator_->async_cancel_all_goals();
+            //         saveMap();
+            //         clearMarkers();
+
+            //         RCLCPP_INFO(get_logger(), "All done, send SIGINT now pls..");
+
+            //     };
+            //     auto dock_future = dock_client_->async_send_goal(dock_goal, dock_goal_options);
+            // }
+
+            break;
+        case rclcpp_action::ResultCode::ABORTED:
+            RCLCPP_ERROR(get_logger(), "Return to start goal result: aborted");
+            break;
+        case rclcpp_action::ResultCode::CANCELED:
+            RCLCPP_ERROR(get_logger(), "Return to start goal result: canceled.");
+            break;
+        default:
+            RCLCPP_ERROR(get_logger(), "Return to start goal result: Unknown");
+            break;
+        }
+        pose_subscription_.reset();
+        map_subscription_.reset();
+        pose_navigator_->async_cancel_all_goals();
+        saveMap();
+        clearMarkers();
+        RCLCPP_INFO(get_logger(), "All done, send SIGINT now pls..");
+    };
+
+    RCLCPP_INFO(get_logger(), "Sending return to home goal %f,%f", goal.pose.pose.position.x, goal.pose.pose.position.y);
+    auto return_goal_handle = pose_navigator_->async_send_goal(goal, send_goal_options);
 }
 
 

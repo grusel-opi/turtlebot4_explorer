@@ -43,7 +43,7 @@ bool isClose(geometry_msgs::msg::Point& a, geometry_msgs::msg::Point& b, double 
     return false;
 }
 
-std::array<double, 4> frontierToBB(Frontier& frontier) {
+std::array<double, 4> frontierToBB(Frontier& frontier, float resolution) {
     double x_min = frontier.centroid.x, x_max = frontier.centroid.x;
     double y_min = frontier.centroid.y, y_max = frontier.centroid.y;
     for (const auto & p : frontier.points) {
@@ -52,7 +52,7 @@ std::array<double, 4> frontierToBB(Frontier& frontier) {
         if (p.y < y_min) y_min = p.y;
         if (p.y > y_max) y_max = p.y;
     }
-    return {x_min, x_max, y_min, y_max};
+    return {x_min - resolution/2., x_max + resolution/2., y_min - resolution/2., y_max + resolution/2.};
 }
 
 bool pointInBB(const std::array<double, 4>& bb, geometry_msgs::msg::Point& centroid) {
@@ -60,7 +60,7 @@ bool pointInBB(const std::array<double, 4>& bb, geometry_msgs::msg::Point& centr
     if (centroid.x > x_min && centroid.x < x_max &&
         centroid.y > y_min && centroid.y < y_max)
     {
-            return true;
+        return true;
     } else {
         return false;
     }
