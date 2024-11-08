@@ -44,16 +44,15 @@ Explorer::Explorer()
     start_pose_ = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
 
     current_goal_status_.status = ActionStatus::IDLE;
+
+    map_received_ = false;
 }
 
 void Explorer::start() {
     
     RCLCPP_INFO(get_logger(), "Waiting for nav2 stack..");
     pose_navigator_->wait_for_action_server();
-    
-    RCLCPP_INFO(get_logger(), "Waiting for undock action server..");
-    undock_client_->wait_for_action_server();
-
+   
     rclcpp::WallRate wait_for_pose_rate(1);
     while (rclcpp::ok() && !pose_) {
         RCLCPP_INFO(get_logger(), "Waiting to receive pose message..");
@@ -63,12 +62,13 @@ void Explorer::start() {
 
     // lets not do automatic docking and undocking since these maneuvers are very rough (distorting the map) and not modifiable (thx irobot people)
 
+    // RCLCPP_INFO(get_logger(), "Waiting for undock action server..");
+    // undock_client_->wait_for_action_server();
     // RCLCPP_INFO(get_logger(), "Sending undock command.");
     // auto undock_goal = UndockAction::Goal();
     // auto undock_goal_options = UndockClient::SendGoalOptions();
     // undock_goal_options.result_callback = [this](const auto msg){ RCLCPP_INFO(get_logger(), "Undocking result: is_docked: %d", msg.result->is_docked);};
     // auto undock_future = undock_client_->async_send_goal(undock_goal, undock_goal_options);
-
     // rclcpp::spin_until_future_complete(shared_from_this(), undock_future);
     // rclcpp::spin_some(shared_from_this());
 
@@ -347,6 +347,106 @@ void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid
         auto cell_cost = static_cast<unsigned char>(occupancyGrid->data[i]);
         costmap_data[i] = cost_translation_table_[cell_cost];
     }
+
+    map_received_ = true;
+
+}
+
+void Explorer::calculateGridPattern() {
+
+    rclcpp::Client<nav_msgs::srv::GetMap>::SharedPtr client = create_client<nav_msgs::srv::GetMap>("/map_server/map");
+    auto request = std::make_shared<nav_msgs::srv::GetMap::Request>();
+
+    while (!client->wait_for_service(1s)) {
+        if (!rclcpp::ok()) {
+            RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the service. Exiting.");
+            return;
+        }
+        RCLCPP_INFO(get_logger(), "service not available, waiting again...");
+    }
+
+    nav2_costmap_2d::Costmap2D costmap;
+    nav_msgs::msg::OccupancyGrid occupancy_grid;
+    auto result = client->async_send_request(request);
+
+    if (rclcpp::spin_until_future_complete(shared_from_this(), result) ==
+        rclcpp::FutureReturnCode::SUCCESS)
+    {
+        RCLCPP_INFO(get_logger(), "SUCCESS");
+
+        occupancy_grid = result.get()->map;
+
+
+        const auto occupancyGridInfo = occupancy_grid.info;
+        costmap.resizeMap(occupancyGridInfo.width,
+                            occupancyGridInfo.height,
+                            occupancyGridInfo.resolution,
+                            occupancyGridInfo.origin.position.x,
+                            occupancyGridInfo.origin.position.y);
+
+
+        unsigned char *costmap_data = costmap.getCharMap();
+        size_t costmap_size = costmap.getSizeInCellsX() * costmap.getSizeInCellsY();
+        for (size_t i = 0; i < costmap_size && i < occupancy_grid.data.size(); ++i) {
+            auto cell_cost = static_cast<unsigned char>(occupancy_grid.data[i]);
+            costmap_data[i] = cost_translation_table_[cell_cost];
+        }
+
+    } else {
+        RCLCPP_ERROR(get_logger(), "Failed to call service");
+        return;
+    }
+
+    const double step_size = 0.5;
+    const double size_x_w = costmap.getSizeInCellsX() * costmap.getResolution();
+    const double size_y_w = costmap.getSizeInCellsX() * costmap.getResolution();
+
+    std::vector<geometry_msgs::msg::Point> positions;
+
+    unsigned int mx, my;
+
+    for (double step_x = step_size; step_x < size_x_w; step_x += step_size) {
+        for (double step_y = step_size; step_y < size_y_w; step_y += step_size) {
+        
+            geometry_msgs::msg::Point p;
+      
+            if (costmap.mapToWorld(step_x, step_y, p.x, p.y)) {
+                geometry_msgs::msg::Point p;
+                p.x = mx;
+                p.y = my;
+                positions.push_back(p);
+            }
+        }
+    }
+
+    for (unsigned int i = 0; i < positions.size(); i++) {
+
+        std_msgs::msg::ColorRGBA color;
+
+        color.r = 1.0;
+        color.g = 0;
+        color.b = 0;
+        color.a = 1.0;
+
+        std::vector<visualization_msgs::msg::Marker> &markers = marker_array.markers;
+        visualization_msgs::msg::Marker m;
+
+        m.header.frame_id = "map";
+        m.header.stamp = this->now();
+        m.frame_locked = true;
+
+        m.action = visualization_msgs::msg::Marker::ADD;
+        m.ns = "grid_pattern";
+        m.id = i;
+        m.type = visualization_msgs::msg::Marker::SPHERE;
+        m.pose.position = positions[i];
+        m.scale.x = 0.3;
+        m.scale.y = 0.3;
+        m.scale.z = 0.3;
+        m.color = color;
+        markers.push_back(m);
+        marker_array_publisher_->publish(marker_array);
+    }
 }
 
 void Explorer::poseCallback(geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr poseMsg) {
@@ -413,6 +513,7 @@ void Explorer::stop() {
     auto goal = nav2_msgs::action::NavigateToPose::Goal();
     goal.pose.pose.position = start_pose_->pose.pose.position;
     goal.pose.pose.orientation = start_pose_->pose.pose.orientation;
+    goal.behavior_tree = "/home/mayerfel/ws/autonomous_acquisition/bt/nav2home.xml";
     goal.pose.header.frame_id = "map";
 
     auto send_goal_options = NavClient::SendGoalOptions();
@@ -493,7 +594,10 @@ void Explorer::saveMap() {
 int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
     auto explorer = std::make_shared<Explorer>();
-    explorer->start();
+    
+    // explorer->start();
+    explorer->calculateGridPattern();
+    
     rclcpp::spin(explorer);
     rclcpp::shutdown();
     return 0;

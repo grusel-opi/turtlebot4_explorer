@@ -8,6 +8,9 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
+
+#include "nav_msgs/srv/get_map.hpp"
+
 #include "nav2_costmap_2d/costmap_2d.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
@@ -34,6 +37,8 @@ public:
     using DockClient = rclcpp_action::Client<DockAction>;
 
     void start();
+
+    void calculateGridPattern();
 
 private:
 
@@ -68,6 +73,8 @@ private:
     std::string map_path_;
 
     bool is_exploring_;
+
+    bool map_received_;
 
     int min_free_;
 
