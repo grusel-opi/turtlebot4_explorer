@@ -354,8 +354,10 @@ void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid
 
 void Explorer::calculateGridPattern() {
 
-    rclcpp::Client<nav_msgs::srv::GetMap>::SharedPtr client = create_client<nav_msgs::srv::GetMap>("/map_server/map");
-    auto request = std::make_shared<nav_msgs::srv::GetMap::Request>();
+    rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedPtr client = create_client<nav2_msgs::srv::GetCostmap>("/global_costmap/get_costmap");
+    auto request = std::make_shared<nav2_msgs::srv::GetCostmap::Request>();
+    nav2_msgs::msg::CostmapMetaData meta_data;
+    request.get()->specs = meta_data;
 
     while (!client->wait_for_service(1s)) {
         if (!rclcpp::ok()) {
@@ -366,7 +368,7 @@ void Explorer::calculateGridPattern() {
     }
 
     nav2_costmap_2d::Costmap2D costmap;
-    nav_msgs::msg::OccupancyGrid occupancy_grid;
+    nav2_msgs::msg::Costmap map;
     auto result = client->async_send_request(request);
 
     if (rclcpp::spin_until_future_complete(shared_from_this(), result) ==
@@ -374,21 +376,20 @@ void Explorer::calculateGridPattern() {
     {
         RCLCPP_INFO(get_logger(), "SUCCESS");
 
-        occupancy_grid = result.get()->map;
+        map = result.get()->map;
 
-
-        const auto occupancyGridInfo = occupancy_grid.info;
-        costmap.resizeMap(occupancyGridInfo.width,
-                            occupancyGridInfo.height,
-                            occupancyGridInfo.resolution,
-                            occupancyGridInfo.origin.position.x,
-                            occupancyGridInfo.origin.position.y);
+        const auto meta_data = map.metadata;
+        costmap.resizeMap(meta_data.size_x,
+                          meta_data.size_y,
+                          meta_data.resolution,
+                          meta_data.origin.position.x,
+                          meta_data.origin.position.y);
 
 
         unsigned char *costmap_data = costmap.getCharMap();
         size_t costmap_size = costmap.getSizeInCellsX() * costmap.getSizeInCellsY();
-        for (size_t i = 0; i < costmap_size && i < occupancy_grid.data.size(); ++i) {
-            auto cell_cost = static_cast<unsigned char>(occupancy_grid.data[i]);
+        for (size_t i = 0; i < costmap_size && i < map.data.size(); ++i) {
+            auto cell_cost = static_cast<unsigned char>(map.data[i]);
             costmap_data[i] = cost_translation_table_[cell_cost];
         }
 
@@ -397,24 +398,65 @@ void Explorer::calculateGridPattern() {
         return;
     }
 
-    const double step_size = 0.5;
-    const double size_x_w = costmap.getSizeInCellsX() * costmap.getResolution();
-    const double size_y_w = costmap.getSizeInCellsX() * costmap.getResolution();
+    const double step_size_w = 0.75;
+    const unsigned int step_size_m = (unsigned int) step_size_w / costmap.getResolution();
+    const double size_x_m = costmap.getSizeInCellsX();
+    const double size_y_m = costmap.getSizeInCellsY();
 
     std::vector<geometry_msgs::msg::Point> positions;
 
     unsigned int mx, my;
 
-    for (double step_x = step_size; step_x < size_x_w; step_x += step_size) {
-        for (double step_y = step_size; step_y < size_y_w; step_y += step_size) {
-        
-            geometry_msgs::msg::Point p;
-      
-            if (costmap.mapToWorld(step_x, step_y, p.x, p.y)) {
-                geometry_msgs::msg::Point p;
-                p.x = mx;
-                p.y = my;
-                positions.push_back(p);
+    RCLCPP_INFO(get_logger(), "starting search");
+
+    for (mx = 0; mx < size_x_m; mx += step_size_m) {
+        for (my = 0; my < size_y_m; my += step_size_m) {
+
+            unsigned char cost = costmap.getCost(mx, my);
+            unsigned char best_cost = cost;
+            unsigned int best_mx = mx, best_my = my;
+            bool found_next = false;
+            int count = 0;
+
+            RCLCPP_INFO(get_logger(), "cost for %d, %d: %d", mx, my, cost);
+
+            if (cost < 100) {
+
+                while (best_cost > 20 && count < 20) {
+                    
+                    for (int dx = -1; dx < 2; dx++) {
+                        for (int dy = -1; dy < 2; dy++) {
+
+                            count++;
+
+                            unsigned int nbr_x = best_mx + dx, nbr_y = best_my + dy;
+
+                            if (nbr_x >= size_x_m || nbr_y >= size_y_m) {
+                                continue;
+                            }
+
+                            unsigned char nbr_cost = costmap.getCost(nbr_x, nbr_y);
+
+                            RCLCPP_INFO(get_logger(), "searching: cost for %d, %d: %d", nbr_x, nbr_y, nbr_cost);
+
+                            if (nbr_cost < best_cost) {
+                                best_my = nbr_y;
+                                best_mx = nbr_x;
+                                best_cost = nbr_cost;
+                                found_next = true;
+                            }
+                        }
+                    }
+                    if (!found_next) {
+                        RCLCPP_INFO(get_logger(), "could not find a cost gradient!");
+                        break;
+                    }
+                }
+                if (found_next) {
+                    geometry_msgs::msg::Point p;
+                    costmap.mapToWorld(best_mx, best_my, p.x, p.y);
+                    positions.push_back(p);
+                }
             }
         }
     }
@@ -445,8 +487,11 @@ void Explorer::calculateGridPattern() {
         m.scale.z = 0.3;
         m.color = color;
         markers.push_back(m);
-        marker_array_publisher_->publish(marker_array);
     }
+    marker_array_publisher_->publish(marker_array);
+
+    RCLCPP_INFO(get_logger(), "published positions number: %ld", marker_array.markers.size());
+
 }
 
 void Explorer::poseCallback(geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr poseMsg) {

@@ -11,6 +11,9 @@
 
 #include "nav_msgs/srv/get_map.hpp"
 
+#include "nav2_msgs/srv/get_costmap.hpp"
+#include "nav2_msgs/msg/costmap_meta_data.hpp"
+
 #include "nav2_costmap_2d/costmap_2d.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
