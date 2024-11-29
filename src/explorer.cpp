@@ -14,6 +14,8 @@ Explorer::Explorer()
 {
     RCLCPP_INFO(get_logger(), "Turtlebot4 explorer startup.");
 
+    declare_parameter("global_costmap_topic", rclcpp::ParameterValue(std::string("global_costmap/costmap_raw")));
+
     declare_parameter("map_path", rclcpp::ParameterValue(std::string("~")));
     declare_parameter("min_dist", rclcpp::ParameterValue(1.0));
     declare_parameter("min_size", rclcpp::ParameterValue(5));
@@ -32,7 +34,7 @@ Explorer::Explorer()
             "/pose", 10, std::bind(&Explorer::poseCallback, this, std::placeholders::_1));
 
     map_subscription_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
-            "/map", 10, std::bind(&Explorer::mapCallback, this, std::placeholders::_1));
+            "/global_costmap/costmap", 10, std::bind(&Explorer::mapCallback, this, std::placeholders::_1));
 
     marker_array_publisher_ = create_publisher<visualization_msgs::msg::MarkerArray>("/frontiers", 10);
     
@@ -343,6 +345,7 @@ void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid
 
     unsigned char *costmap_data = costmap_.getCharMap();
     size_t costmap_size = costmap_.getSizeInCellsX() * costmap_.getSizeInCellsY();
+    
     for (size_t i = 0; i < costmap_size && i < occupancyGrid->data.size(); ++i) {
         auto cell_cost = static_cast<unsigned char>(occupancyGrid->data[i]);
         costmap_data[i] = cost_translation_table_[cell_cost];
@@ -354,109 +357,107 @@ void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid
 
 void Explorer::calculateGridPattern() {
 
-    rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedPtr client = create_client<nav2_msgs::srv::GetCostmap>("/global_costmap/get_costmap");
-    auto request = std::make_shared<nav2_msgs::srv::GetCostmap::Request>();
-    nav2_msgs::msg::CostmapMetaData meta_data;
-    request.get()->specs = meta_data;
+    // rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedPtr client = create_client<nav2_msgs::srv::GetCostmap>("/global_costmap/get_costmap");
+    // auto request = std::make_shared<nav2_msgs::srv::GetCostmap::Request>();
+    // nav2_msgs::msg::CostmapMetaData meta_data;
+    // meta_data.layer = "inflation_layer";
+    // request.get()->specs = meta_data;
 
-    while (!client->wait_for_service(1s)) {
-        if (!rclcpp::ok()) {
-            RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the service. Exiting.");
-            return;
-        }
-        RCLCPP_INFO(get_logger(), "service not available, waiting again...");
+    // while (!client->wait_for_service(1s)) {
+    //     if (!rclcpp::ok()) {
+    //         RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the service. Exiting.");
+    //         return;
+    //     }
+    //     RCLCPP_INFO(get_logger(), "service not available, waiting again...");
+    // }
+
+    // nav2_costmap_2d::Costmap2D costmap;
+    // nav2_msgs::msg::Costmap map;
+    // auto result = client->async_send_request(request);
+
+    // if (rclcpp::spin_until_future_complete(shared_from_this(), result) ==
+    //     rclcpp::FutureReturnCode::SUCCESS)
+    // {
+    //     RCLCPP_INFO(get_logger(), "SUCCESS");
+
+    //     map = result.get()->map;
+
+    //     const auto meta_data = map.metadata;
+    //     costmap.resizeMap(meta_data.size_x,
+    //                       meta_data.size_y,
+    //                       meta_data.resolution,
+    //                       meta_data.origin.position.x,
+    //                       meta_data.origin.position.y);
+
+
+    //     unsigned char *costmap_data = costmap.getCharMap();
+    //     size_t costmap_size = costmap.getSizeInCellsX() * costmap.getSizeInCellsY();
+    //     for (size_t i = 0; i < costmap_size && i < map.data.size(); ++i) {
+    //         auto cell_cost = static_cast<unsigned char>(map.data[i]);
+    //         costmap_data[i] = cost_translation_table_[cell_cost];
+    //     }
+
+    // } else {
+    //     RCLCPP_ERROR(get_logger(), "Failed to call service");
+    //     return;
+    // }
+
+    // global_costmap_sub_ = std::make_unique<nav2_costmap_2d::CostmapSubscriber>(shared_from_this(), "global_costmap/costmap");
+
+    rclcpp::WallRate wait_rate(1);
+
+    // std::shared_ptr<nav2_costmap_2d::Costmap2D> costmap = nullptr;
+
+    while (rclcpp::ok() && !map_received_) {
+        
+        RCLCPP_INFO(get_logger(), "Waiting to receive costmap..");
+        rclcpp::spin_some(shared_from_this());
+        wait_rate.sleep();
+        
+        // try {
+        //     costmap = global_costmap_sub_->getCostmap();
+        // } catch (const std::runtime_error &e) {
+        //     RCLCPP_INFO(get_logger(), "Waiting to receive costmap..");
+        //     rclcpp::spin_some(shared_from_this());
+        //     wait_rate.sleep();
+        // }       
     }
 
-    nav2_costmap_2d::Costmap2D costmap;
-    nav2_msgs::msg::Costmap map;
-    auto result = client->async_send_request(request);
+    const double step_size_w = 0.5;
+    double resolution = costmap_->getResolution();
+    const unsigned int step_size_m = std::max((int) ((step_size_w + 0.001 )/ resolution), 1);
+    const double size_x_m = costmap_->getSizeInCellsX();
+    const double size_y_m = costmap_->getSizeInCellsY();
 
-    if (rclcpp::spin_until_future_complete(shared_from_this(), result) ==
-        rclcpp::FutureReturnCode::SUCCESS)
-    {
-        RCLCPP_INFO(get_logger(), "SUCCESS");
-
-        map = result.get()->map;
-
-        const auto meta_data = map.metadata;
-        costmap.resizeMap(meta_data.size_x,
-                          meta_data.size_y,
-                          meta_data.resolution,
-                          meta_data.origin.position.x,
-                          meta_data.origin.position.y);
-
-
-        unsigned char *costmap_data = costmap.getCharMap();
-        size_t costmap_size = costmap.getSizeInCellsX() * costmap.getSizeInCellsY();
-        for (size_t i = 0; i < costmap_size && i < map.data.size(); ++i) {
-            auto cell_cost = static_cast<unsigned char>(map.data[i]);
-            costmap_data[i] = cost_translation_table_[cell_cost];
-        }
-
-    } else {
-        RCLCPP_ERROR(get_logger(), "Failed to call service");
-        return;
-    }
-
-    const double step_size_w = 0.75;
-    const unsigned int step_size_m = (unsigned int) step_size_w / costmap.getResolution();
-    const double size_x_m = costmap.getSizeInCellsX();
-    const double size_y_m = costmap.getSizeInCellsY();
+    RCLCPP_INFO(get_logger(), "got map. size_x: %f, size_y: %f, res: %f, step size (m) %d", size_x_m, size_y_m, resolution, step_size_m);
 
     std::vector<geometry_msgs::msg::Point> positions;
 
     unsigned int mx, my;
 
-    RCLCPP_INFO(get_logger(), "starting search");
+    RCLCPP_INFO(get_logger(), "starting search, stepsize in cells: %d", step_size_m);
 
     for (mx = 0; mx < size_x_m; mx += step_size_m) {
         for (my = 0; my < size_y_m; my += step_size_m) {
 
-            unsigned char cost = costmap.getCost(mx, my);
-            unsigned char best_cost = cost;
-            unsigned int best_mx = mx, best_my = my;
-            bool found_next = false;
-            int count = 0;
+            // geometry_msgs::msg::Point p;
+            // costmap_->mapToWorld(mx, my, p.x, p.y);
+            // positions.push_back(p);
+
+            unsigned char cost = costmap_->getCost(mx, my);
+            // unsigned char best_cost = cost;
+            // unsigned int best_mx = mx, best_my = my;
+            // int count = 0;
 
             RCLCPP_INFO(get_logger(), "cost for %d, %d: %d", mx, my, cost);
 
-            if (cost < 100) {
+            if (cost < 50) {
 
-                while (best_cost > 20 && count < 20) {
-                    
-                    for (int dx = -1; dx < 2; dx++) {
-                        for (int dy = -1; dy < 2; dy++) {
+                geometry_msgs::msg::Point p;
+                costmap_->mapToWorld(mx, my, p.x, p.y);
+                positions.push_back(p);
 
-                            count++;
-
-                            unsigned int nbr_x = best_mx + dx, nbr_y = best_my + dy;
-
-                            if (nbr_x >= size_x_m || nbr_y >= size_y_m) {
-                                continue;
-                            }
-
-                            unsigned char nbr_cost = costmap.getCost(nbr_x, nbr_y);
-
-                            RCLCPP_INFO(get_logger(), "searching: cost for %d, %d: %d", nbr_x, nbr_y, nbr_cost);
-
-                            if (nbr_cost < best_cost) {
-                                best_my = nbr_y;
-                                best_mx = nbr_x;
-                                best_cost = nbr_cost;
-                                found_next = true;
-                            }
-                        }
-                    }
-                    if (!found_next) {
-                        RCLCPP_INFO(get_logger(), "could not find a cost gradient!");
-                        break;
-                    }
-                }
-                if (found_next) {
-                    geometry_msgs::msg::Point p;
-                    costmap.mapToWorld(best_mx, best_my, p.x, p.y);
-                    positions.push_back(p);
-                }
+                RCLCPP_INFO(get_logger(), "pushed %d, %d (m), %f, %f (w), cost: %d", mx, my, p.x, p.y, cost);
             }
         }
     }
@@ -609,6 +610,9 @@ void Explorer::stop() {
             RCLCPP_ERROR(get_logger(), "Return to start goal result: Unknown");
             break;
         }
+
+        global_costmap_sub_.reset();
+
         pose_subscription_.reset();
         map_subscription_.reset();
         pose_navigator_->async_cancel_all_goals();
@@ -640,7 +644,7 @@ int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
     auto explorer = std::make_shared<Explorer>();
     
-    // explorer->start();
+    //explorer->start();
     explorer->calculateGridPattern();
     
     rclcpp::spin(explorer);

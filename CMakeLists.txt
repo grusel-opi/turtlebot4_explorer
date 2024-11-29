@@ -13,10 +13,10 @@ set(deps
         geometry_msgs
         nav_msgs
         nav2_msgs
+        nav2_costmap_2d
         tf2
         tf2_ros
         rclcpp_action
-        nav2_costmap_2d
         nav2_map_server
         slam_toolbox
         visualization_msgs

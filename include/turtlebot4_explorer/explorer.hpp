@@ -11,6 +11,9 @@
 
 #include "nav_msgs/srv/get_map.hpp"
 
+#include "nav2_costmap_2d/costmap_2d.hpp"
+#include "nav2_costmap_2d/costmap_subscriber.hpp"
+
 #include "nav2_msgs/srv/get_costmap.hpp"
 #include "nav2_msgs/msg/costmap_meta_data.hpp"
 
@@ -48,6 +51,8 @@ private:
     NavClient::SharedPtr pose_navigator_;
 
     std::shared_future<rclcpp_action::ClientGoalHandle<NavAction>::SharedPtr> future_goal_handle_;
+
+    std::unique_ptr<nav2_costmap_2d::CostmapSubscriber> global_costmap_sub_;
 
     UndockClient::SharedPtr undock_client_;
 
