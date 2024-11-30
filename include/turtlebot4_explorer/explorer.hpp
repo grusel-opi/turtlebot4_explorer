@@ -14,8 +14,7 @@
 #include "nav2_costmap_2d/costmap_2d.hpp"
 #include "nav2_costmap_2d/costmap_subscriber.hpp"
 
-#include "nav2_msgs/srv/get_costmap.hpp"
-#include "nav2_msgs/msg/costmap_meta_data.hpp"
+#include "nav2_msgs/srv/get_costs.hpp"
 
 #include "nav2_costmap_2d/costmap_2d.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
@@ -52,47 +51,29 @@ private:
 
     std::shared_future<rclcpp_action::ClientGoalHandle<NavAction>::SharedPtr> future_goal_handle_;
 
-    std::unique_ptr<nav2_costmap_2d::CostmapSubscriber> global_costmap_sub_;
-
-    UndockClient::SharedPtr undock_client_;
-
-    DockClient::SharedPtr dock_client_;
-
     rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_subscription_;
-
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_subscription_;
+
+    geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr pose_;
+    geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr start_pose_;
 
     nav2_costmap_2d::Costmap2D costmap_;
 
+    rclcpp::Client<nav2_msgs::srv::GetCosts>::SharedPtr global_cost_client_;
+
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_array_publisher_;
-
-    std::vector<Frontier> frontiers_;
-
-    GoalStatus current_goal_status_;
-    
-    Frontier current_goal_;
-    
     visualization_msgs::msg::MarkerArray marker_array;
 
-    double loop_rate_;
-    
+    Frontier current_goal_;
+    std::vector<Frontier> frontiers_;    
     std::vector<std::array<double, 4>> aborted_;
         
     std::string map_path_;
 
-    bool is_exploring_;
-
     bool map_received_;
 
-    int min_free_;
-
     double min_dist_;
-
     int min_size_;
-
-    geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr pose_;
-
-    geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr start_pose_;
 
     std::array<unsigned char, 256> cost_translation_table_;
 
@@ -123,6 +104,9 @@ private:
     void navigationResponseCallback(const rclcpp_action::ClientGoalHandle<nav2_msgs::action::NavigateToPose>::SharedPtr &goal_handle);
 
     bool checkGoal();
+
+    std::array<unsigned int, 4> getMapObstacleBounds();
+
 };
 
 #endif

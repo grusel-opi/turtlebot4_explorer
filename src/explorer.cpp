@@ -34,18 +34,15 @@ Explorer::Explorer()
             "/pose", 10, std::bind(&Explorer::poseCallback, this, std::placeholders::_1));
 
     map_subscription_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
-            "/global_costmap/costmap", 10, std::bind(&Explorer::mapCallback, this, std::placeholders::_1));
+            "/map", 10, std::bind(&Explorer::mapCallback, this, std::placeholders::_1));
 
     marker_array_publisher_ = create_publisher<visualization_msgs::msg::MarkerArray>("/frontiers", 10);
     
-    undock_client_ = rclcpp_action::create_client<UndockAction>(this, "/undock");
-    dock_client_ = rclcpp_action::create_client<DockAction>(this, "/dock");
+    global_cost_client_ = create_client<nav2_msgs::srv::GetCosts>("/global_costmap/get_cost_global_costmap");
 
     cost_translation_table_ = initTranslationTable();
 
     start_pose_ = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
-
-    current_goal_status_.status = ActionStatus::IDLE;
 
     map_received_ = false;
 }
@@ -61,18 +58,6 @@ void Explorer::start() {
         rclcpp::spin_some(shared_from_this());
         wait_for_pose_rate.sleep();
     }
-
-    // lets not do automatic docking and undocking since these maneuvers are very rough (distorting the map) and not modifiable (thx irobot people)
-
-    // RCLCPP_INFO(get_logger(), "Waiting for undock action server..");
-    // undock_client_->wait_for_action_server();
-    // RCLCPP_INFO(get_logger(), "Sending undock command.");
-    // auto undock_goal = UndockAction::Goal();
-    // auto undock_goal_options = UndockClient::SendGoalOptions();
-    // undock_goal_options.result_callback = [this](const auto msg){ RCLCPP_INFO(get_logger(), "Undocking result: is_docked: %d", msg.result->is_docked);};
-    // auto undock_future = undock_client_->async_send_goal(undock_goal, undock_goal_options);
-    // rclcpp::spin_until_future_complete(shared_from_this(), undock_future);
-    // rclcpp::spin_some(shared_from_this());
 
     RCLCPP_INFO(get_logger(), "Remembering start pose.");
     start_pose_->pose.pose.position = pose_->pose.pose.position;
@@ -104,7 +89,6 @@ void Explorer::explore() {
 
     RCLCPP_INFO(get_logger(), "Sending goal %f,%f", frontiers_[0].centroid.x, frontiers_[0].centroid.y);
     future_goal_handle_ = pose_navigator_->async_send_goal(goal, send_goal_options);
-    current_goal_status_.status = ActionStatus::PROCESSING;
     current_goal_ = frontiers_[0];
 } 
 
@@ -288,7 +272,6 @@ void Explorer::navigationResponseCallback(
         RCLCPP_INFO(get_logger(), "[RESPONSE] Goal accepted by server.");
     } else {
         RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
-        current_goal_status_.status = ActionStatus::FAILED;
         explore();
     }
 }
@@ -309,12 +292,9 @@ void Explorer::navigationResultCallback(const rclcpp_action::ClientGoalHandle<na
 
     switch (result.code) {
         case rclcpp_action::ResultCode::SUCCEEDED:
-            current_goal_status_.status = ActionStatus::SUCCEEDED;
             RCLCPP_INFO(get_logger(), "[RESULT] Goal result: reached. Still unexplored: %d", checkGoal());
             break;
         case rclcpp_action::ResultCode::ABORTED:
-            current_goal_status_.status = ActionStatus::FAILED;
-            // current_goal_status_.error_code = result.result.error_code;
             {
                 auto bb = frontierToBB(current_goal_, costmap_.getResolution());
                 RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: aborted, marking as unreachable: x:%f-%f, y: %f-%f Still unexplored: %d", bb[0], bb[1], bb[2], bb[3], checkGoal());
@@ -322,7 +302,6 @@ void Explorer::navigationResultCallback(const rclcpp_action::ClientGoalHandle<na
             }
             break;
         case rclcpp_action::ResultCode::CANCELED:
-            current_goal_status_.status = ActionStatus::FAILED;
             RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: canceled. Still unexplored: %d", checkGoal());
             break;
         default:
@@ -357,112 +336,62 @@ void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid
 
 void Explorer::calculateGridPattern() {
 
-    // rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedPtr client = create_client<nav2_msgs::srv::GetCostmap>("/global_costmap/get_costmap");
-    // auto request = std::make_shared<nav2_msgs::srv::GetCostmap::Request>();
-    // nav2_msgs::msg::CostmapMetaData meta_data;
-    // meta_data.layer = "inflation_layer";
-    // request.get()->specs = meta_data;
-
-    // while (!client->wait_for_service(1s)) {
-    //     if (!rclcpp::ok()) {
-    //         RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the service. Exiting.");
-    //         return;
-    //     }
-    //     RCLCPP_INFO(get_logger(), "service not available, waiting again...");
-    // }
-
-    // nav2_costmap_2d::Costmap2D costmap;
-    // nav2_msgs::msg::Costmap map;
-    // auto result = client->async_send_request(request);
-
-    // if (rclcpp::spin_until_future_complete(shared_from_this(), result) ==
-    //     rclcpp::FutureReturnCode::SUCCESS)
-    // {
-    //     RCLCPP_INFO(get_logger(), "SUCCESS");
-
-    //     map = result.get()->map;
-
-    //     const auto meta_data = map.metadata;
-    //     costmap.resizeMap(meta_data.size_x,
-    //                       meta_data.size_y,
-    //                       meta_data.resolution,
-    //                       meta_data.origin.position.x,
-    //                       meta_data.origin.position.y);
-
-
-    //     unsigned char *costmap_data = costmap.getCharMap();
-    //     size_t costmap_size = costmap.getSizeInCellsX() * costmap.getSizeInCellsY();
-    //     for (size_t i = 0; i < costmap_size && i < map.data.size(); ++i) {
-    //         auto cell_cost = static_cast<unsigned char>(map.data[i]);
-    //         costmap_data[i] = cost_translation_table_[cell_cost];
-    //     }
-
-    // } else {
-    //     RCLCPP_ERROR(get_logger(), "Failed to call service");
-    //     return;
-    // }
-
-    // global_costmap_sub_ = std::make_unique<nav2_costmap_2d::CostmapSubscriber>(shared_from_this(), "global_costmap/costmap");
-
     rclcpp::WallRate wait_rate(1);
-
-    // std::shared_ptr<nav2_costmap_2d::Costmap2D> costmap = nullptr;
 
     while (rclcpp::ok() && !map_received_) {
         
         RCLCPP_INFO(get_logger(), "Waiting to receive costmap..");
         rclcpp::spin_some(shared_from_this());
         wait_rate.sleep();
-        
-        // try {
-        //     costmap = global_costmap_sub_->getCostmap();
-        // } catch (const std::runtime_error &e) {
-        //     RCLCPP_INFO(get_logger(), "Waiting to receive costmap..");
-        //     rclcpp::spin_some(shared_from_this());
-        //     wait_rate.sleep();
-        // }       
     }
 
     const double step_size_w = 0.5;
     double resolution = costmap_->getResolution();
-    const unsigned int step_size_m = std::max((int) ((step_size_w + 0.001 )/ resolution), 1);
-    const double size_x_m = costmap_->getSizeInCellsX();
-    const double size_y_m = costmap_->getSizeInCellsY();
+    const unsigned int step_size_m = std::max((int) std::round(step_size_w / resolution), 1);
+    const unsigned int size_x_m = costmap_->getSizeInCellsX();
+    const unsigned int size_y_m = costmap_->getSizeInCellsY();
 
-    RCLCPP_INFO(get_logger(), "got map. size_x: %f, size_y: %f, res: %f, step size (m) %d", size_x_m, size_y_m, resolution, step_size_m);
+    RCLCPP_INFO(get_logger(), "map: size_x: %f, size_y: %f, res: %f, step size (m) %d", size_x_m, size_y_m, resolution, step_size_m);
 
-    std::vector<geometry_msgs::msg::Point> positions;
+    std::array<unsigned int, 4> bounds = getMapObstacleBounds();
 
+    std::vector<geometry_msgs::msg::PoseStamped> positions;
     unsigned int mx, my;
 
-    RCLCPP_INFO(get_logger(), "starting search, stepsize in cells: %d", step_size_m);
+    for (mx = bounds[0]; mx < bounds[1]; mx += step_size_m) {
+        for (my = bounds[2]; my < bounds[3]; my += step_size_m) {
 
-    for (mx = 0; mx < size_x_m; mx += step_size_m) {
-        for (my = 0; my < size_y_m; my += step_size_m) {
-
-            // geometry_msgs::msg::Point p;
-            // costmap_->mapToWorld(mx, my, p.x, p.y);
-            // positions.push_back(p);
-
-            unsigned char cost = costmap_->getCost(mx, my);
-            // unsigned char best_cost = cost;
-            // unsigned int best_mx = mx, best_my = my;
-            // int count = 0;
-
-            RCLCPP_INFO(get_logger(), "cost for %d, %d: %d", mx, my, cost);
-
-            if (cost < 50) {
-
-                geometry_msgs::msg::Point p;
-                costmap_->mapToWorld(mx, my, p.x, p.y);
-                positions.push_back(p);
-
-                RCLCPP_INFO(get_logger(), "pushed %d, %d (m), %f, %f (w), cost: %d", mx, my, p.x, p.y, cost);
-            }
+            geometry_msgs::msg::PoseStamped p;
+            costmap_->mapToWorld(mx, my, p.pose.position.x, p.pose.position.y);
+            positions.push_back(p);
         }
     }
 
-    for (unsigned int i = 0; i < positions.size(); i++) {
+    auto request = std::make_shared<nav2_msgs::srv::GetCosts::Request>();
+    pose.header.frame_id = "map";
+    pose.header.stamp = this->now();
+    request->poses = positions;
+    request->use_footprint = false;
+
+    rclcpp::WallRate wait_for_service_rate(1);
+    while (rclcpp::ok() && !global_cost_client_->wait_for_service(std::chrono::seconds(1))) {
+        RCLCPP_INFO(get_logger(), "Waiting for getCosts service..");
+        rclcpp::spin_some(shared_from_this());
+        wait_for_service_rate.sleep();
+    }
+
+    auto get_costs_response = global_cost_client_->async_send_request(request);
+    auto costs = get_costs_response.get();
+
+    std::vector<geometry_msgs::msg::PoseStamped> positions_filtered;
+
+    for (int i = 0; i < positions.size(); i++) {
+        if (costs[i] < 50) { // TODO: check this threshold!
+            positions_filtered.push_back(positions[i]);
+        }
+    }
+
+    for (unsigned int i = 0; i < positions_filtered.size(); i++) {
 
         std_msgs::msg::ColorRGBA color;
 
@@ -482,7 +411,7 @@ void Explorer::calculateGridPattern() {
         m.ns = "grid_pattern";
         m.id = i;
         m.type = visualization_msgs::msg::Marker::SPHERE;
-        m.pose.position = positions[i];
+        m.pose.position = positions_filtered[i];
         m.scale.x = 0.3;
         m.scale.y = 0.3;
         m.scale.z = 0.3;
@@ -492,6 +421,53 @@ void Explorer::calculateGridPattern() {
     marker_array_publisher_->publish(marker_array);
 
     RCLCPP_INFO(get_logger(), "published positions number: %ld", marker_array.markers.size());
+
+}
+
+// TODO: check this logic and obstacle cost (can cost >= 200 be considered environment bound?)
+std::array<unsigned int, 4> getMapObstacleBounds(unsigned char obstacleCost = 200) {
+    
+    std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*costmap_.getMutex());
+    
+    const unsigned int size_x_m = costmap_->getSizeInCellsX();
+    const unsigned int size_y_m = costmap_->getSizeInCellsY();
+
+    unsigned int mx, my;
+
+    unsigned int start_x = size_x_m;
+    unsigned int start_y = 0;
+
+    for (my = 0; my < size_y_m; my++) {
+        for (mx = 0; mx < size_x_m; mx++) {
+            if (costmap_.getCost(mx, my) >= obstacleCost) {
+                if (start_y == 0) {
+                    start_y = my;
+                }
+                if (mx < start_x) {
+                    start_x = mx;
+                    break;
+                }
+            }
+        }
+    }
+
+    unsigned int end_x = 0, end_y = 0;
+
+    for (my = size_y_m - 1; my >= 0; my--) {
+        for (mx = size_x_m - 1; mx >= 0; mx--) {
+            if (costmap_.getCost(mx, my) >= obstacleCost) {
+                if (end_y == 0) {
+                    end_y = my;
+                }
+                if (mx > end_x) {
+                    end_x = mx;
+                    break;
+                }
+            }
+        }
+    }
+
+    return {start_x, start_y, end_x, end_y};
 
 }
 
@@ -522,7 +498,6 @@ void Explorer::drawMarkers(const std::vector<Frontier> &frontiers) {
             color.a = 1.0;
         }
 
-        std::vector<visualization_msgs::msg::Marker> &markers = marker_array.markers;
         visualization_msgs::msg::Marker m;
 
         m.header.frame_id = "map";
@@ -538,7 +513,7 @@ void Explorer::drawMarkers(const std::vector<Frontier> &frontiers) {
         m.scale.y = 0.3;
         m.scale.z = 0.3;
         m.color = color;
-        markers.push_back(m);
+        marker_array.markers.push_back(m);
         marker_array_publisher_->publish(marker_array);
     }
 }
