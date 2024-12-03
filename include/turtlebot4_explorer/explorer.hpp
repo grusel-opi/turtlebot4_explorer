@@ -4,12 +4,18 @@
 
 #include <vector>
 #include <array>
+#include <stack>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 
 #include "nav_msgs/srv/get_map.hpp"
+
+#include "nav2_costmap_2d/costmap_2d.hpp"
+#include "nav2_costmap_2d/costmap_subscriber.hpp"
+
+#include "nav2_msgs/srv/get_costmap.hpp"
 
 #include "nav2_costmap_2d/costmap_2d.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
@@ -55,6 +61,8 @@ private:
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_subscription_;
 
     nav2_costmap_2d::Costmap2D costmap_;
+
+    rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedPtr global_cost_client_;
 
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_array_publisher_;
 
@@ -115,6 +123,12 @@ private:
     void navigationResponseCallback(const rclcpp_action::ClientGoalHandle<nav2_msgs::action::NavigateToPose>::SharedPtr &goal_handle);
 
     bool checkGoal();
+
+    void getGlobalCostmap(nav2_costmap_2d::Costmap2D& costmap);
+
+    void randomWalkSampling(std::vector<geometry_msgs::msg::PoseStamped>& positions);
+
+    void getMapObstacleBounds(nav2_costmap_2d::Costmap2D& costmap, std::array<unsigned int, 4>& bounds, unsigned char obstacleCost); 
 };
 
 #endif
