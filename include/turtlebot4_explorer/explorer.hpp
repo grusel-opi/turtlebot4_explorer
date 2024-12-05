@@ -80,15 +80,22 @@ private:
         
     std::string map_path_;
 
-    bool is_exploring_;
+    std::string pose_topic_;
+
+    bool is_navigating_;
 
     bool map_received_;
 
-    int min_free_;
-
     double min_dist_;
 
-    int min_size_;
+    unsigned int min_size_;
+
+    unsigned int upper_cost_bound;
+
+    unsigned int lower_cost_bound;
+
+    unsigned int current_coverage_pose_nr_;
+    std::vector<geometry_msgs::msg::Point> coverage_positions_sorted_;
 
     geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr pose_;
 
@@ -126,9 +133,14 @@ private:
 
     void getGlobalCostmap(nav2_costmap_2d::Costmap2D& costmap);
 
-    void randomWalkSampling(std::vector<geometry_msgs::msg::PoseStamped>& positions);
+    void randomWalkSampling(std::vector<geometry_msgs::msg::Point>& positions);
 
-    void getMapObstacleBounds(nav2_costmap_2d::Costmap2D& costmap, std::array<unsigned int, 4>& bounds, unsigned char obstacleCost); 
+    void calculateCoverage();
+
+    void executeCoverage();
+
+    void cheapTSP(std::vector<geometry_msgs::msg::Point>& positions);
+
 };
 
 #endif

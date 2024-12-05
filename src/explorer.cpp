@@ -18,19 +18,24 @@ Explorer::Explorer()
     declare_parameter("map_path", rclcpp::ParameterValue(std::string("~")));
     declare_parameter("min_dist", rclcpp::ParameterValue(1.0));
     declare_parameter("min_size", rclcpp::ParameterValue(5));
+    declare_parameter("pose_topic",rclcpp::ParameterValue(std::string("/pose")));
+    declare_parameter("lower_cost_bound", rclcpp::ParameterValue(40));
+    declare_parameter("upper_cost_bound", rclcpp::ParameterValue(150));
 
     get_parameter("min_size", min_size_);
     get_parameter("min_dist", min_dist_);
     get_parameter("map_path", map_path_);
+    get_parameter("pose_topic", pose_topic_);
 
     RCLCPP_INFO(get_logger(), "min_size: %d", min_size_);
     RCLCPP_INFO(get_logger(), "min_dist: %f", min_dist_);
     RCLCPP_INFO(get_logger(), "map_path: %s", map_path_.c_str());
+    RCLCPP_INFO(get_logger(), "pose_topic: %s", pose_topic_.c_str());
 
     pose_navigator_ = rclcpp_action::create_client<NavAction>(this, "/navigate_to_pose");
     
     pose_subscription_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-            "/pose", 10, std::bind(&Explorer::poseCallback, this, std::placeholders::_1));
+            pose_topic_, 10, std::bind(&Explorer::poseCallback, this, std::placeholders::_1));
 
     map_subscription_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
             "/map", 10, std::bind(&Explorer::mapCallback, this, std::placeholders::_1));
@@ -44,6 +49,8 @@ Explorer::Explorer()
     start_pose_ = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
 
     map_received_ = false;
+
+    is_navigating_ = false;
 }
 
 void Explorer::start() {
@@ -63,7 +70,10 @@ void Explorer::start() {
     start_pose_->pose.pose.orientation = pose_->pose.pose.orientation;
 
     RCLCPP_INFO(get_logger(), "Starting exploration!");
-    explore();
+    
+    // explore();
+
+    calculateCoverage();
 }
 
 void Explorer::explore() {
@@ -88,7 +98,6 @@ void Explorer::explore() {
 
     RCLCPP_INFO(get_logger(), "Sending goal %f,%f", frontiers_[0].centroid.x, frontiers_[0].centroid.y);
     future_goal_handle_ = pose_navigator_->async_send_goal(goal, send_goal_options);
-    current_goal_status_.status = ActionStatus::PROCESSING;
     current_goal_ = frontiers_[0];
 } 
 
@@ -272,7 +281,6 @@ void Explorer::navigationResponseCallback(
         RCLCPP_INFO(get_logger(), "[RESPONSE] Goal accepted by server.");
     } else {
         RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
-        current_goal_status_.status = ActionStatus::FAILED;
         explore();
     }
 }
@@ -293,12 +301,9 @@ void Explorer::navigationResultCallback(const rclcpp_action::ClientGoalHandle<na
 
     switch (result.code) {
         case rclcpp_action::ResultCode::SUCCEEDED:
-            current_goal_status_.status = ActionStatus::SUCCEEDED;
             RCLCPP_INFO(get_logger(), "[RESULT] Goal result: reached. Still unexplored: %d", checkGoal());
             break;
         case rclcpp_action::ResultCode::ABORTED:
-            current_goal_status_.status = ActionStatus::FAILED;
-            // current_goal_status_.error_code = result.result.error_code;
             {
                 auto bb = frontierToBB(current_goal_, costmap_.getResolution());
                 RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: aborted, marking as unreachable: x:%f-%f, y: %f-%f Still unexplored: %d", bb[0], bb[1], bb[2], bb[3], checkGoal());
@@ -306,7 +311,6 @@ void Explorer::navigationResultCallback(const rclcpp_action::ClientGoalHandle<na
             }
             break;
         case rclcpp_action::ResultCode::CANCELED:
-            current_goal_status_.status = ActionStatus::FAILED;
             RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: canceled. Still unexplored: %d", checkGoal());
             break;
         default:
@@ -338,17 +342,11 @@ void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid
 
 }
 
-void Explorer::randomWalkSampling(std::vector<geometry_msgs::msg::PoseStamped>& positions) {
+void Explorer::randomWalkSampling(std::vector<geometry_msgs::msg::Point>& positions) {
 
     nav2_costmap_2d::Costmap2D costmap;
 
     getGlobalCostmap(costmap);
-
-    const double step_size_w = 1.;
-    double resolution = costmap.getResolution();
-    const unsigned int step_size_m = std::max((int) std::round(step_size_w / resolution), 1);
-    const unsigned int size_x_m = costmap.getSizeInCellsX();
-    const unsigned int size_y_m = costmap.getSizeInCellsY();
 
     const auto position = start_pose_->pose.pose.position;
     unsigned int mx, my;
@@ -367,12 +365,25 @@ void Explorer::randomWalkSampling(std::vector<geometry_msgs::msg::PoseStamped>& 
     std::vector<unsigned int> pose_idxs;
     std::stack<unsigned int> dfs;
 
-    unsigned char start_cost = costmap.getCost(mx, my);
-    // unsigned char start_cost = 240;
-
-    RCLCPP_INFO(get_logger(), "start cost: %u", start_cost);
-
+    unsigned char cost = costmap.getCost(mx, my);
     unsigned int pos = costmap.getIndex(mx, my);
+
+    unsigned char upper_cost_bound = 160;
+    unsigned char lower_cost_bound = 80;
+
+    RCLCPP_INFO(get_logger(), "start cost: %u", cost);
+
+    while (cost > upper_cost_bound || cost < lower_cost_bound) {
+        for (unsigned nbr : nhood4(pos, costmap)) {
+            if ((cost > upper_cost_bound && map[nbr] <= cost) || (cost < lower_cost_bound && map[nbr] >= cost)) {
+                cost = map[nbr];
+                pos = nbr;
+            }
+        }
+    }
+
+    RCLCPP_INFO(get_logger(), "new cost: %u", cost);
+
     dfs.push(pos);
 
     visited_flag[dfs.top()] = true;
@@ -392,19 +403,17 @@ void Explorer::randomWalkSampling(std::vector<geometry_msgs::msg::PoseStamped>& 
 
         for (unsigned nbr : nhood4(idx, costmap)) {
 
-            if (!visited_flag[nbr] && map[nbr] <= 150 && map[nbr] >= 70) {
+            if (!visited_flag[nbr] && map[nbr] <= upper_cost_bound && map[nbr] >= lower_cost_bound) {
                 visited_flag[nbr] = true;
                 dfs.push(nbr);
             }
-
-            // RCLCPP_INFO(get_logger(), "cost for nbr: %d, pose_idxs size: %ld", map[nbr], pose_idxs.size());
         }
     }
 
     for (auto idx : pose_idxs) {
-        geometry_msgs::msg::PoseStamped p;
+        geometry_msgs::msg::Point p;
         costmap.indexToCells(idx, mx, my);
-        costmap.mapToWorld(mx, my, p.pose.position.x, p.pose.position.y);
+        costmap.mapToWorld(mx, my, p.x, p.y);
         positions.push_back(p);
     }
 }
@@ -420,7 +429,7 @@ void Explorer::getGlobalCostmap(nav2_costmap_2d::Costmap2D& costmap) {
             RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the service. Exiting.");
             return;
         }
-        RCLCPP_INFO(get_logger(), "service not available, waiting again...");
+        RCLCPP_INFO(get_logger(), "service not available, waiting again 1s...");
     }
 
     nav2_msgs::msg::Costmap map;
@@ -451,9 +460,6 @@ void Explorer::getGlobalCostmap(nav2_costmap_2d::Costmap2D& costmap) {
         size_t costmap_size = costmap.getSizeInCellsX() * costmap.getSizeInCellsY();
         for (size_t i = 0; i < costmap_size && i < map.data.size(); ++i) {
             costmap_data[i] = map.data[i];
-            // costmap_data[i] = cost_translation_table_[cell_cost];
-            // auto cell_cost = static_cast<unsigned char>(map.data[i]);
-            // costmap_data[i] = cost_translation_table_[cell_cost];
         }
 
     } else {
@@ -462,21 +468,20 @@ void Explorer::getGlobalCostmap(nav2_costmap_2d::Costmap2D& costmap) {
     }
 }
 
-void Explorer::calculateGridPattern() {
+void Explorer::calculateCoverage() {
 
-    nav2_costmap_2d::Costmap2D costmap;
-
-    getGlobalCostmap(costmap);
-
-    std::vector<geometry_msgs::msg::PoseStamped> positions;
+    std::vector<geometry_msgs::msg::Point> positions;
+    coverage_positions_sorted_.clear();
 
     randomWalkSampling(positions);
+    cheapTSP(positions);
 
-    if (positions.empty()) {
+    if (coverage_positions_sorted_.empty()) {
         RCLCPP_ERROR(get_logger(), "No positions calculated!");
+        return;
     }
 
-    for (unsigned int i = 0; i < positions.size(); i++) {
+    for (unsigned int i = 0; i < coverage_positions_sorted_.size(); i++) {
 
         std_msgs::msg::ColorRGBA color;
 
@@ -496,73 +501,109 @@ void Explorer::calculateGridPattern() {
         m.ns = "grid_pattern";
         m.id = i;
         m.type = visualization_msgs::msg::Marker::SPHERE;
-        m.pose.position = positions[i].pose.position;
+        m.pose.position = coverage_positions_sorted_[i];
         m.scale.x = 0.3;
         m.scale.y = 0.3;
         m.scale.z = 0.3;
         m.color = color;
         markers.push_back(m);
-        marker_array_publisher_->publish(marker_array);
     }
     marker_array_publisher_->publish(marker_array);
 
     RCLCPP_INFO(get_logger(), "published positions number: %ld", marker_array.markers.size());
 
+    current_coverage_pose_nr_ = 0;
+    executeCoverage();
+
 }
 
-// TODO: check this logic and obstacle cost (can cost >= 200 be considered environment bound?)
-void Explorer::getMapObstacleBounds(nav2_costmap_2d::Costmap2D& costmap, std::array<unsigned int, 4>& bounds, unsigned char obstacleCost) {
+void Explorer::executeCoverage() {
+
+    geometry_msgs::msg::Point next_goal = coverage_positions_sorted_[current_coverage_pose_nr_];
+
+    auto goal = nav2_msgs::action::NavigateToPose::Goal();
+    goal.pose.pose.position = next_goal;
+    goal.pose.pose.orientation.w = 1.;
+    goal.pose.header.frame_id = "map";
+
+    auto send_goal_options = NavClient::SendGoalOptions();
+
+    send_goal_options.goal_response_callback = [this](const auto& goal_handle) {
+        if (goal_handle) {
+            RCLCPP_INFO(get_logger(), "[RESPONSE] Goal accepted by server.");
+        } else {
+            RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
+            current_coverage_pose_nr_++;
+            executeCoverage();
+        }
+    };
+
+    send_goal_options.result_callback = [this](const auto& result) {
+        if (result.goal_id != future_goal_handle_.get()->get_goal_id()) {
+            RCLCPP_DEBUG(get_logger(),
+            "[RESULT] Goal IDs do not match for the current goal handle and received result."
+            "Ignoring likely due to receiving result for an old goal.");
+            return;
+        }
+
+        switch (result.code) {
+            case rclcpp_action::ResultCode::SUCCEEDED:
+                RCLCPP_INFO(get_logger(), "[RESULT] Goal result: reached.");
+                break;
+            case rclcpp_action::ResultCode::ABORTED:
+                RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: aborted, continuing with next..");
+                break;
+            case rclcpp_action::ResultCode::CANCELED:
+                RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: canceled.");
+                break;
+            default:
+                RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: Unknown");
+                break;
+        }
+        current_coverage_pose_nr_++;
+        executeCoverage();
+    };
+
+    RCLCPP_INFO(get_logger(), "[REQUEST] Sending goal %f,%f", next_goal.x, next_goal.y);
+    future_goal_handle_ = pose_navigator_->async_send_goal(goal, send_goal_options);
+}
+
+
+void Explorer::cheapTSP(std::vector<geometry_msgs::msg::Point>& positions) {
     
-    std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*costmap.getMutex());
-    
-    const unsigned int size_x_m = costmap.getSizeInCellsX();
-    const unsigned int size_y_m = costmap.getSizeInCellsY();
+    geometry_msgs::msg::Point current_pos = pose_->pose.pose.position;
 
-    unsigned int mx, my;
+    coverage_positions_sorted_.push_back(current_pos);
 
-    unsigned int start_x = size_x_m;
-    unsigned int start_y = 0;
+    int best_next_idx = 0;
+    double best_dist = 10e10f;
 
-    for (my = 0; my < size_y_m; my++) {
-        for (mx = 0; mx < size_x_m; mx++) {
-            if (costmap.getCost(mx, my) >= obstacleCost) {
-                if (start_y == 0) {
-                    start_y = my;
-                }
-                if (mx < start_x) {
-                    start_x = mx;
-                    break;
+    int todo = positions.size();
+    std::vector<bool> planned(todo, false);
+    int done = 0;
+
+    while (done < todo) {
+        for (int i = 0; i < todo; i++) {
+            if (!planned[i]) {
+                double tmp_dist = std::sqrt(std::pow(current_pos.x - positions[i].x, 2) + std::pow(current_pos.y - positions[i].y, 2));
+                if (tmp_dist < best_dist) {
+                    best_dist = tmp_dist;
+                    best_next_idx = i;
                 }
             }
         }
-    }
 
-    unsigned int end_x = 0, end_y = 0;
-
-    for (my = size_y_m - 1; my >= 0; my--) {
-        for (mx = size_x_m - 1; mx >= 0; mx--) {
-
-            if (costmap.getCost(mx, my) >= obstacleCost) {
-                if (end_y == 0) {
-                    end_y = my;
-                }
-                if (mx > end_x) {
-                    end_x = mx;
-                    break;
-                }
-            }
-
-            if (mx == 0)
-            break;
+        if (best_dist > 0.3) {
+            coverage_positions_sorted_.push_back(positions[best_next_idx]);
+            current_pos = positions[best_next_idx];
+            RCLCPP_INFO(get_logger(), "Next goal: %f, %f; dist: %f", current_pos.x, current_pos.y, best_dist);
         }
-        if (my == 0)
-        break;
+        done++;
+        planned[best_next_idx] = true;
+        best_dist = 10e10f;
     }
 
-    bounds[0] = start_x;
-    bounds[1] = end_x;
-    bounds[2] = start_y;
-    bounds[3] = end_y;
+    coverage_positions_sorted_.push_back(pose_->pose.pose.position);
 
 }
 
@@ -663,7 +704,7 @@ void Explorer::stop() {
         saveMap();
         clearMarkers();
         RCLCPP_INFO(get_logger(), "All done, calculating pattern now..");
-        calculateGridPattern();
+        calculateCoverage();
     };
 
     RCLCPP_INFO(get_logger(), "Sending return to home goal %f,%f", goal.pose.pose.position.x, goal.pose.pose.position.y);
@@ -689,8 +730,7 @@ int main(int argc, char *argv[]) {
     rclcpp::init(argc, argv);
     auto explorer = std::make_shared<Explorer>();
     
-    //explorer->start();
-    explorer->calculateGridPattern();
+    explorer->start();
     
     rclcpp::spin(explorer);
     rclcpp::shutdown();
