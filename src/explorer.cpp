@@ -546,7 +546,7 @@ void Explorer::calculateCoverage() {
         executeCoverage();
     };
 
-    client->async_send_request(request, async_cb);
+    auto is_this_needed = client->async_send_request(request, async_cb);
 }
 
 bool Explorer::randomWalkSampling(std::vector<geometry_msgs::msg::Point>& positions, nav2_costmap_2d::Costmap2D& costmap) {
