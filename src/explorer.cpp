@@ -42,8 +42,6 @@ Explorer::Explorer()
 
     marker_array_publisher_ = create_publisher<visualization_msgs::msg::MarkerArray>("/frontiers", 10);
     
-    global_cost_client_ = create_client<nav2_msgs::srv::GetCostmap>("/global_costmap/get_costmap");
-
     cost_translation_table_ = initTranslationTable();
 
     start_pose_ = std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
@@ -51,6 +49,7 @@ Explorer::Explorer()
     map_received_ = false;
 
     is_navigating_ = false;
+
 }
 
 void Explorer::start() {
@@ -72,8 +71,7 @@ void Explorer::start() {
     RCLCPP_INFO(get_logger(), "Starting exploration!");
     
     // explore();
-
-    calculateCoverage();
+    stop();
 }
 
 void Explorer::explore() {
@@ -267,7 +265,7 @@ bool Explorer::isAchievableFrontierCell(unsigned int idx, const std::vector<bool
     }
 
     for(unsigned int nbr : nhood4(idx, costmap_)) {
-        if (map[nbr] == nav2_costmap_2d::FREE_SPACE) {
+        if (map[nbr] < 200) { // TODO: make this thresh configurable?
             return true;
         }
     }
@@ -342,270 +340,6 @@ void Explorer::mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid
 
 }
 
-void Explorer::randomWalkSampling(std::vector<geometry_msgs::msg::Point>& positions) {
-
-    nav2_costmap_2d::Costmap2D costmap;
-
-    getGlobalCostmap(costmap);
-
-    const auto position = start_pose_->pose.pose.position;
-    unsigned int mx, my;
-
-    if (!costmap.worldToMap(position.x, position.y, mx, my)) {
-        RCLCPP_ERROR(get_logger(), "Robot start position out of costmap bounds, should not be possible..");
-        return;
-    }
-
-    std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap.getMutex()));
-
-    auto map = costmap.getCharMap();
-
-    std::vector<bool> frontier_flag(costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
-    std::vector<bool> visited_flag(costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
-    std::vector<unsigned int> pose_idxs;
-    std::stack<unsigned int> dfs;
-
-    unsigned char cost = costmap.getCost(mx, my);
-    unsigned int pos = costmap.getIndex(mx, my);
-
-    unsigned char upper_cost_bound = 160;
-    unsigned char lower_cost_bound = 80;
-
-    RCLCPP_INFO(get_logger(), "start cost: %u", cost);
-
-    while (cost > upper_cost_bound || cost < lower_cost_bound) {
-        for (unsigned nbr : nhood4(pos, costmap)) {
-            if ((cost > upper_cost_bound && map[nbr] <= cost) || (cost < lower_cost_bound && map[nbr] >= cost)) {
-                cost = map[nbr];
-                pos = nbr;
-            }
-        }
-    }
-
-    RCLCPP_INFO(get_logger(), "new cost: %u", cost);
-
-    dfs.push(pos);
-
-    visited_flag[dfs.top()] = true;
-
-    int sample_dist = 40;
-    int counter = 0;
-
-    while (!dfs.empty()) {
-
-        unsigned int idx = dfs.top();
-        dfs.pop();
-        counter++;
-        if (counter > sample_dist) {
-            pose_idxs.push_back(idx);
-            counter = 0;
-        }
-
-        for (unsigned nbr : nhood4(idx, costmap)) {
-
-            if (!visited_flag[nbr] && map[nbr] <= upper_cost_bound && map[nbr] >= lower_cost_bound) {
-                visited_flag[nbr] = true;
-                dfs.push(nbr);
-            }
-        }
-    }
-
-    for (auto idx : pose_idxs) {
-        geometry_msgs::msg::Point p;
-        costmap.indexToCells(idx, mx, my);
-        costmap.mapToWorld(mx, my, p.x, p.y);
-        positions.push_back(p);
-    }
-}
-
-void Explorer::getGlobalCostmap(nav2_costmap_2d::Costmap2D& costmap) {
-
-    rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedPtr client = create_client<nav2_msgs::srv::GetCostmap>("/global_costmap/get_costmap");
-    auto request = std::make_shared<nav2_msgs::srv::GetCostmap::Request>();
-    
-    RCLCPP_INFO(get_logger(), "waiting for /global_costmap/get_costmap sercive now..");
-    while (!client->wait_for_service(1s)) {
-        if (!rclcpp::ok()) {
-            RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the service. Exiting.");
-            return;
-        }
-        RCLCPP_INFO(get_logger(), "service not available, waiting again 1s...");
-    }
-
-    nav2_msgs::msg::Costmap map;
-
-    RCLCPP_INFO(get_logger(), "sending request");
-    auto result = client->async_send_request(request);
-
-    // RCLCPP_INFO(get_logger(), "getting response");
-    // auto result = response.get();
-
-    if (rclcpp::spin_until_future_complete(shared_from_this(), result) ==
-        rclcpp::FutureReturnCode::SUCCESS)
-    {
-
-        RCLCPP_INFO(get_logger(), "SUCCESS");
-
-        map = result.get()->map;
-
-        const auto meta_data = map.metadata;
-        costmap.resizeMap(meta_data.size_x,
-                            meta_data.size_y,
-                            meta_data.resolution,
-                            meta_data.origin.position.x,
-                            meta_data.origin.position.y);
-
-
-        unsigned char *costmap_data = costmap.getCharMap();
-        size_t costmap_size = costmap.getSizeInCellsX() * costmap.getSizeInCellsY();
-        for (size_t i = 0; i < costmap_size && i < map.data.size(); ++i) {
-            costmap_data[i] = map.data[i];
-        }
-
-    } else {
-        RCLCPP_ERROR(get_logger(), "Failed to call service");
-        return;
-    }
-}
-
-void Explorer::calculateCoverage() {
-
-    std::vector<geometry_msgs::msg::Point> positions;
-    coverage_positions_sorted_.clear();
-
-    randomWalkSampling(positions);
-    cheapTSP(positions);
-
-    if (coverage_positions_sorted_.empty()) {
-        RCLCPP_ERROR(get_logger(), "No positions calculated!");
-        return;
-    }
-
-    for (unsigned int i = 0; i < coverage_positions_sorted_.size(); i++) {
-
-        std_msgs::msg::ColorRGBA color;
-
-        color.r = 1.0;
-        color.g = 0;
-        color.b = 0;
-        color.a = 1.0;
-
-        std::vector<visualization_msgs::msg::Marker> &markers = marker_array.markers;
-        visualization_msgs::msg::Marker m;
-
-        m.header.frame_id = "map";
-        m.header.stamp = this->now();
-        m.frame_locked = true;
-
-        m.action = visualization_msgs::msg::Marker::ADD;
-        m.ns = "grid_pattern";
-        m.id = i;
-        m.type = visualization_msgs::msg::Marker::SPHERE;
-        m.pose.position = coverage_positions_sorted_[i];
-        m.scale.x = 0.3;
-        m.scale.y = 0.3;
-        m.scale.z = 0.3;
-        m.color = color;
-        markers.push_back(m);
-    }
-    marker_array_publisher_->publish(marker_array);
-
-    RCLCPP_INFO(get_logger(), "published positions number: %ld", marker_array.markers.size());
-
-    current_coverage_pose_nr_ = 0;
-    executeCoverage();
-
-}
-
-void Explorer::executeCoverage() {
-
-    geometry_msgs::msg::Point next_goal = coverage_positions_sorted_[current_coverage_pose_nr_];
-
-    auto goal = nav2_msgs::action::NavigateToPose::Goal();
-    goal.pose.pose.position = next_goal;
-    goal.pose.pose.orientation.w = 1.;
-    goal.pose.header.frame_id = "map";
-
-    auto send_goal_options = NavClient::SendGoalOptions();
-
-    send_goal_options.goal_response_callback = [this](const auto& goal_handle) {
-        if (goal_handle) {
-            RCLCPP_INFO(get_logger(), "[RESPONSE] Goal accepted by server.");
-        } else {
-            RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
-            current_coverage_pose_nr_++;
-            executeCoverage();
-        }
-    };
-
-    send_goal_options.result_callback = [this](const auto& result) {
-        if (result.goal_id != future_goal_handle_.get()->get_goal_id()) {
-            RCLCPP_DEBUG(get_logger(),
-            "[RESULT] Goal IDs do not match for the current goal handle and received result."
-            "Ignoring likely due to receiving result for an old goal.");
-            return;
-        }
-
-        switch (result.code) {
-            case rclcpp_action::ResultCode::SUCCEEDED:
-                RCLCPP_INFO(get_logger(), "[RESULT] Goal result: reached.");
-                break;
-            case rclcpp_action::ResultCode::ABORTED:
-                RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: aborted, continuing with next..");
-                break;
-            case rclcpp_action::ResultCode::CANCELED:
-                RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: canceled.");
-                break;
-            default:
-                RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: Unknown");
-                break;
-        }
-        current_coverage_pose_nr_++;
-        executeCoverage();
-    };
-
-    RCLCPP_INFO(get_logger(), "[REQUEST] Sending goal %f,%f", next_goal.x, next_goal.y);
-    future_goal_handle_ = pose_navigator_->async_send_goal(goal, send_goal_options);
-}
-
-
-void Explorer::cheapTSP(std::vector<geometry_msgs::msg::Point>& positions) {
-    
-    geometry_msgs::msg::Point current_pos = pose_->pose.pose.position;
-
-    coverage_positions_sorted_.push_back(current_pos);
-
-    int best_next_idx = 0;
-    double best_dist = 10e10f;
-
-    int todo = positions.size();
-    std::vector<bool> planned(todo, false);
-    int done = 0;
-
-    while (done < todo) {
-        for (int i = 0; i < todo; i++) {
-            if (!planned[i]) {
-                double tmp_dist = std::sqrt(std::pow(current_pos.x - positions[i].x, 2) + std::pow(current_pos.y - positions[i].y, 2));
-                if (tmp_dist < best_dist) {
-                    best_dist = tmp_dist;
-                    best_next_idx = i;
-                }
-            }
-        }
-
-        if (best_dist > 0.3) {
-            coverage_positions_sorted_.push_back(positions[best_next_idx]);
-            current_pos = positions[best_next_idx];
-            RCLCPP_INFO(get_logger(), "Next goal: %f, %f; dist: %f", current_pos.x, current_pos.y, best_dist);
-        }
-        done++;
-        planned[best_next_idx] = true;
-        best_dist = 10e10f;
-    }
-
-    coverage_positions_sorted_.push_back(pose_->pose.pose.position);
-
-}
 
 void Explorer::poseCallback(geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr poseMsg) {
     // RCLCPP_INFO(get_logger(), "poseCallback..");
@@ -703,7 +437,6 @@ void Explorer::stop() {
         pose_navigator_->async_cancel_all_goals();
         saveMap();
         clearMarkers();
-        RCLCPP_INFO(get_logger(), "All done, calculating pattern now..");
         calculateCoverage();
     };
 
@@ -717,17 +450,270 @@ void Explorer::saveMap() {
     auto serializePoseGraphRequest = std::make_shared<slam_toolbox::srv::SerializePoseGraph::Request>();
 
     serializePoseGraphRequest->filename = map_path_;
+    RCLCPP_INFO(get_logger(), "Sending request to /slam_toolbox/serialize_map");
     auto serializePoseResult = mapSerializer->async_send_request(serializePoseGraphRequest);
 
     auto map_saver = create_client<slam_toolbox::srv::SaveMap>("/slam_toolbox/save_map");
     auto saveMapRequest = std::make_shared<slam_toolbox::srv::SaveMap::Request>();
     saveMapRequest->name.data = map_path_;
+    RCLCPP_INFO(get_logger(), "Sending request to /slam_toolbox/save_map");
     auto saveMapResult = map_saver->async_send_request(saveMapRequest);
 }
 
 
+void Explorer::calculateCoverage() {
+
+    RCLCPP_INFO(get_logger(), "[calculateCoverage]");
+
+    rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedPtr client = create_client<nav2_msgs::srv::GetCostmap>("/global_costmap/get_costmap");
+    auto request = std::make_shared<nav2_msgs::srv::GetCostmap::Request>();
+    
+    RCLCPP_INFO(get_logger(), "waiting for /global_costmap/get_costmap sercive now..");
+    while (!client->wait_for_service(1s)) {
+        if (!rclcpp::ok()) {
+            RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the service. Exiting.");
+            return;
+        }
+        RCLCPP_INFO(get_logger(), "service not available, waiting again 1s...");
+    }
+
+    RCLCPP_INFO(get_logger(), "sending request to /global_costmap/get_costmap");
+
+    auto async_cb = [this](rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedFuture result) {
+        RCLCPP_INFO(get_logger(), "SUCCESS?");
+
+        nav2_costmap_2d::Costmap2D costmap;
+        nav2_msgs::msg::Costmap map;
+
+        map = result.get()->map;
+
+        const auto meta_data = map.metadata;
+        costmap.resizeMap(meta_data.size_x,
+                            meta_data.size_y,
+                            meta_data.resolution,
+                            meta_data.origin.position.x,
+                            meta_data.origin.position.y);
+
+
+        unsigned char *costmap_data = costmap.getCharMap();
+        size_t costmap_size = costmap.getSizeInCellsX() * costmap.getSizeInCellsY();
+        for (size_t i = 0; i < costmap_size && i < map.data.size(); ++i) {
+            costmap_data[i] = map.data[i];
+        }
+
+        std::vector<geometry_msgs::msg::Point> positions;
+        coverage_positions_sorted_.clear();
+
+        if (!randomWalkSampling(positions, costmap)) {
+            RCLCPP_ERROR(get_logger(), "Error calculating coverage poses!");
+            return;
+        }
+        
+        cheapTSP(positions);
+
+        for (unsigned int i = 0; i < coverage_positions_sorted_.size(); i++) {
+
+            std_msgs::msg::ColorRGBA color;
+
+            color.r = 1.0;
+            color.g = 0;
+            color.b = 0;
+            color.a = 1.0;
+
+            std::vector<visualization_msgs::msg::Marker> &markers = marker_array.markers;
+            visualization_msgs::msg::Marker m;
+
+            m.header.frame_id = "map";
+            m.header.stamp = this->now();
+            m.frame_locked = true;
+
+            m.action = visualization_msgs::msg::Marker::ADD;
+            m.ns = "grid_pattern";
+            m.id = i;
+            m.type = visualization_msgs::msg::Marker::SPHERE;
+            m.pose.position = coverage_positions_sorted_[i];
+            m.scale.x = 0.3;
+            m.scale.y = 0.3;
+            m.scale.z = 0.3;
+            m.color = color;
+            markers.push_back(m);
+        }
+        marker_array_publisher_->publish(marker_array);
+
+        RCLCPP_INFO(get_logger(), "published positions number: %ld", marker_array.markers.size());
+
+        current_coverage_pose_nr_ = 0;
+        executeCoverage();
+    };
+
+    client->async_send_request(request, async_cb);
+}
+
+bool Explorer::randomWalkSampling(std::vector<geometry_msgs::msg::Point>& positions, nav2_costmap_2d::Costmap2D& costmap) {
+
+    const auto position = start_pose_->pose.pose.position;
+    unsigned int mx, my;
+
+    if (!costmap.worldToMap(position.x, position.y, mx, my)) {
+        RCLCPP_ERROR(get_logger(), "Robot start position out of costmap bounds, should not be possible..");
+        return false;
+    }
+
+    std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap.getMutex()));
+
+    auto map = costmap.getCharMap();
+
+    std::vector<bool> frontier_flag(costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
+    std::vector<bool> visited_flag(costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
+    
+    std::queue<unsigned int> bfs;
+
+    unsigned char cost = costmap.getCost(mx, my);
+    unsigned int pos_idx = costmap.getIndex(mx, my);
+
+    unsigned char upper_cost_bound = 150;
+    unsigned char lower_cost_bound = 80;
+
+    RCLCPP_INFO(get_logger(), "start cost: %u", cost);
+
+    while (cost > upper_cost_bound || cost < lower_cost_bound) {
+        for (unsigned nbr : nhood4(pos_idx, costmap)) {
+            if ((cost > upper_cost_bound && map[nbr] <= cost) || (cost < lower_cost_bound && map[nbr] >= cost)) {
+                cost = map[nbr];
+                pos_idx = nbr;
+            }
+        }
+    }
+
+    RCLCPP_INFO(get_logger(), "new cost: %u", cost);
+
+    bfs.push(pos_idx);
+
+    geometry_msgs::msg::Point pos;
+    costmap.indexToCells(pos_idx, mx, my);
+    costmap.mapToWorld(mx, my, pos.x, pos.y);
+
+    visited_flag[bfs.front()] = true;
+
+    // int sample_dist = 10;
+    // int counter = 0;
+
+    while (!bfs.empty()) {
+
+        unsigned int idx = bfs.front();
+        bfs.pop();
+
+        // counter++;
+        if (map[idx] <= upper_cost_bound && map[idx] >= lower_cost_bound /*  && counter > sample_dist */) {
+            costmap.indexToCells(idx, mx, my);
+            costmap.mapToWorld(mx, my, pos.x, pos.y);
+            positions.push_back(pos);
+            // counter = 0;
+        }
+
+        for (unsigned nbr : nhood4(idx, costmap)) {
+
+            if (!visited_flag[nbr] && map[nbr] <= upper_cost_bound /* && map[nbr] >= lower_cost_bound*/) {
+                visited_flag[nbr] = true;
+                bfs.push(nbr);
+            }
+        }
+    }
+    return true;
+}
+
+void Explorer::executeCoverage() {
+
+    geometry_msgs::msg::Point next_goal = coverage_positions_sorted_[current_coverage_pose_nr_];
+
+    auto goal = nav2_msgs::action::NavigateToPose::Goal();
+    goal.pose.pose.position = next_goal;
+    goal.pose.pose.orientation.w = 1.;
+    goal.pose.header.frame_id = "map";
+
+    auto send_goal_options = NavClient::SendGoalOptions();
+
+    send_goal_options.goal_response_callback = [this](const auto& goal_handle) {
+        if (goal_handle) {
+            RCLCPP_INFO(get_logger(), "[RESPONSE] Goal accepted by server.");
+        } else {
+            RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
+            current_coverage_pose_nr_++;
+            executeCoverage();
+        }
+    };
+
+    send_goal_options.result_callback = [this](const auto& result) {
+        if (result.goal_id != future_goal_handle_.get()->get_goal_id()) {
+            RCLCPP_DEBUG(get_logger(),
+            "[RESULT] Goal IDs do not match for the current goal handle and received result."
+            "Ignoring likely due to receiving result for an old goal.");
+            return;
+        }
+
+        switch (result.code) {
+            case rclcpp_action::ResultCode::SUCCEEDED:
+                RCLCPP_INFO(get_logger(), "[RESULT] Goal result: reached.");
+                break;
+            case rclcpp_action::ResultCode::ABORTED:
+                RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: aborted, continuing with next..");
+                break;
+            case rclcpp_action::ResultCode::CANCELED:
+                RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: canceled.");
+                break;
+            default:
+                RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: Unknown");
+                break;
+        }
+        current_coverage_pose_nr_++;
+        executeCoverage();
+    };
+
+    RCLCPP_INFO(get_logger(), "[REQUEST] Sending goal %f,%f", next_goal.x, next_goal.y);
+    future_goal_handle_ = pose_navigator_->async_send_goal(goal, send_goal_options);
+}
+
+
+void Explorer::cheapTSP(std::vector<geometry_msgs::msg::Point>& positions) {
+    
+    geometry_msgs::msg::Point current_pos = pose_->pose.pose.position;
+
+    coverage_positions_sorted_.push_back(current_pos);
+
+    int best_next_idx = 0;
+    double best_dist = 10e10f;
+
+    int todo = positions.size();
+    std::vector<bool> planned(todo, false);
+    int done = 0;
+
+    while (done < todo) {
+
+        for (int i = 0; i < todo; i++) {
+            if (!planned[i]) {
+                double tmp_dist = std::sqrt(std::pow(current_pos.x - positions[i].x, 2) + std::pow(current_pos.y - positions[i].y, 2));
+                if (tmp_dist < best_dist) {
+                    best_dist = tmp_dist;
+                    best_next_idx = i;
+                }
+            }
+        }
+
+        coverage_positions_sorted_.push_back(positions[best_next_idx]);
+        current_pos = positions[best_next_idx];
+        RCLCPP_INFO(get_logger(), "Next goal: %f, %f; dist: %f", current_pos.x, current_pos.y, best_dist);
+        
+        done++;
+        planned[best_next_idx] = true;
+        best_dist = 10e10f;
+    }
+
+    coverage_positions_sorted_.push_back(pose_->pose.pose.position);
+
+}
+
 int main(int argc, char *argv[]) {
-    rclcpp::init(argc, argv);
+   rclcpp::init(argc, argv);
     auto explorer = std::make_shared<Explorer>();
     
     explorer->start();

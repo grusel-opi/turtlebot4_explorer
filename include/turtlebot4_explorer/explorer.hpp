@@ -44,7 +44,7 @@ public:
 
     void start();
 
-    void calculateGridPattern();
+    void stop();
 
 private:
 
@@ -61,8 +61,6 @@ private:
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_subscription_;
 
     nav2_costmap_2d::Costmap2D costmap_;
-
-    rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedPtr global_cost_client_;
 
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_array_publisher_;
 
@@ -119,8 +117,6 @@ private:
 
     void clearMarkers();
 
-    void stop();
-
     void saveMap();
 
     void navigationResultCallback(const rclcpp_action::ClientGoalHandle<nav2_msgs::action::NavigateToPose>::WrappedResult &result);
@@ -131,15 +127,15 @@ private:
 
     bool checkGoal();
 
-    void getGlobalCostmap(nav2_costmap_2d::Costmap2D& costmap);
-
-    void randomWalkSampling(std::vector<geometry_msgs::msg::Point>& positions);
+    bool randomWalkSampling(std::vector<geometry_msgs::msg::Point>& positions, nav2_costmap_2d::Costmap2D& costmap);
 
     void calculateCoverage();
 
     void executeCoverage();
 
     void cheapTSP(std::vector<geometry_msgs::msg::Point>& positions);
+
+    void getGlobalCostmapResultCallback(rclcpp::Client<nav2_msgs::srv::GetCostmap>::SharedFuture result);
 
 };
 
