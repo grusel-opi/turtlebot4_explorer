@@ -1,7 +1,8 @@
 /turtlebot4_explorer:
   ros__parameters:
+    map_path: "/home/mayerfel/ws/explore_ws/map"
     min_size: 20
     min_dist: 1.5
-    map_path: "/home/mayerfel/ws/explore_ws/map"
-    pose_topic: "/amcl_pose" # for localization only
-    # pose_topic: "/pose"
+    map_given: true
+    lower_cost_bound_: 0
+    upper_cost_bound_: 200
