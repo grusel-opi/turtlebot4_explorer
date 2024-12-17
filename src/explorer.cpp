@@ -628,7 +628,7 @@ private:
 
         // check the heading of the coverage pattern (we want obstacles on the robots right hand side)
         geometry_msgs::msg::Point first_cov_pos = coverage_positions_sorted_[1]; // idx 0 is current pos
-        geometry_msgs::msg::Point second_cov_pos = coverage_positions_sorted_[2];
+        geometry_msgs::msg::Point second_cov_pos = coverage_positions_sorted_[10];
         geometry_msgs::msg::Point dir_vec; // we abuse point structure as a vector here
         geometry_msgs::msg::Point query;
         
@@ -638,8 +638,8 @@ private:
         query.x = first_cov_pos.x + dir_vec.x;
         query.y = first_cov_pos.y + dir_vec.y;
 
-        unsigned int first_pos_cost;
-        unsigned int query_pos_cost;
+        int first_pos_cost;
+        int query_pos_cost;
 
         unsigned int mx, my;
         
@@ -655,7 +655,9 @@ private:
         }
         query_pos_cost = costmap.getCost(mx, my);
 
-        if (first_pos_cost - query_pos_cost > 0) {
+        int grad = first_pos_cost - query_pos_cost;
+
+        if (grad < 0) {
             current_coverage_pose_nr_ = 0;
             coverage_step_dir_ = 5; // TODO: automatically adjust this or downsample costmap!
         } else {
@@ -663,7 +665,7 @@ private:
             coverage_step_dir_ = -5; // TODO: automatically adjust this or downsample costmap!
         }
 
-        RCLCPP_INFO(get_logger(), "first_pos_cost: %d, query_pos_cost: %d, current_coverage_pose_nr_: %d, coverage_step_dir_: %d", first_pos_cost, query_pos_cost, current_coverage_pose_nr_, coverage_step_dir_);
+        RCLCPP_INFO(get_logger(), "first_pos_cost: %d, query_pos_cost: %d, current_coverage_pose_nr_: %d, grad: %d, coverage_step_dir_: %d", first_pos_cost, query_pos_cost, current_coverage_pose_nr_, grad, coverage_step_dir_);
 
         executeCoverage();
     }
@@ -690,14 +692,11 @@ private:
         unsigned char cost = costmap.getCost(mx, my);
         unsigned int pos_idx = costmap.getIndex(mx, my);
 
-        unsigned char upper_cost_bound = 150;
-        unsigned char lower_cost_bound = 80;
-
         RCLCPP_INFO(get_logger(), "start cost: %u", cost);
 
-        while (cost > upper_cost_bound || cost < lower_cost_bound) {
+        while (cost > upper_cost_bound_ || cost < lower_cost_bound_) {
             for (unsigned nbr : nhood4(pos_idx, costmap)) {
-                if ((cost > upper_cost_bound && map[nbr] <= cost) || (cost < lower_cost_bound && map[nbr] >= cost)) {
+                if ((cost > upper_cost_bound_ && map[nbr] <= cost) || (cost < lower_cost_bound_ && map[nbr] >= cost)) {
                     cost = map[nbr];
                     pos_idx = nbr;
                 }
@@ -723,7 +722,7 @@ private:
             bfs.pop();
 
             // counter++;
-            if (map[idx] <= upper_cost_bound && map[idx] >= lower_cost_bound /*  && counter > sample_dist */) {
+            if (map[idx] <= upper_cost_bound_ && map[idx] >= lower_cost_bound_ /*  && counter > sample_dist */) {
                 costmap.indexToCells(idx, mx, my);
                 costmap.mapToWorld(mx, my, pos.x, pos.y);
                 positions.push_back(pos);
@@ -732,7 +731,7 @@ private:
 
             for (unsigned nbr : nhood4(idx, costmap)) {
 
-                if (!visited_flag[nbr] && map[nbr] <= upper_cost_bound /* && map[nbr] >= lower_cost_bound*/) {
+                if (!visited_flag[nbr] && map[nbr] <= upper_cost_bound_ /* && map[nbr] >= lower_cost_bound*/) {
                     visited_flag[nbr] = true;
                     bfs.push(nbr);
                 }
@@ -828,7 +827,7 @@ private:
 
             coverage_positions_sorted_.push_back(positions[best_next_idx]);
             current_pos = positions[best_next_idx];
-            RCLCPP_INFO(get_logger(), "Next goal: %f, %f; dist: %f", current_pos.x, current_pos.y, best_dist);
+            //RCLCPP_INFO(get_logger(), "Next goal: %f, %f; dist: %f", current_pos.x, current_pos.y, best_dist);
             
             done++;
             planned[best_next_idx] = true;
