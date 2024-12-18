@@ -1,5 +1,6 @@
 #include <vector>
 #include <array>
+#include <stack>
 #include <cstddef>
 
 #include "rclcpp/rclcpp.hpp"
@@ -627,7 +628,7 @@ private:
 
         // check the heading of the coverage pattern (we want obstacles on the robots right hand side)
         geometry_msgs::msg::Point first_cov_pos = coverage_positions_sorted_[1]; // idx 0 is current pos
-        geometry_msgs::msg::Point second_cov_pos = coverage_positions_sorted_[10];
+        geometry_msgs::msg::Point second_cov_pos = coverage_positions_sorted_[5];
         geometry_msgs::msg::Point dir_vec; // we abuse point structure as a vector here
         geometry_msgs::msg::Point query;
 
@@ -670,7 +671,7 @@ private:
         m.ns = "grid_pattern";
         m.id = i++;
         m.type = visualization_msgs::msg::Marker::SPHERE;
-        m.pose.position = second_cov_pos;
+        m.pose.position = query;
         m.scale.x = 0.15;
         m.scale.y = 0.15;
         m.scale.z = 0.15;
@@ -708,7 +709,7 @@ private:
 
         int grad = first_pos_cost - query_pos_cost;
 
-        if (grad < 0) {
+        if (grad > 0) {
             current_coverage_pose_nr_ = 0;
             coverage_step_dir_ = 5; // TODO: automatically adjust this or downsample costmap!
         } else {
@@ -738,7 +739,8 @@ private:
         std::vector<bool> frontier_flag(costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
         std::vector<bool> visited_flag(costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
         
-        std::queue<unsigned int> bfs;
+        // std::queue<unsigned int> bfs;
+        std::stack<unsigned int> dfs;
 
         unsigned char cost = costmap.getCost(mx, my);
         unsigned int pos_idx = costmap.getIndex(mx, my);
@@ -756,21 +758,26 @@ private:
 
         RCLCPP_INFO(get_logger(), "new cost: %u", cost);
 
-        bfs.push(pos_idx);
+        // bfs.push(pos_idx);
+        dfs.push(pos_idx);
 
         geometry_msgs::msg::Point pos;
         costmap.indexToCells(pos_idx, mx, my);
         costmap.mapToWorld(mx, my, pos.x, pos.y);
 
-        visited_flag[bfs.front()] = true;
+        // visited_flag[bfs.front()] = true;
+        visited_flag[dfs.top()] = true;
 
         // int sample_dist = 10;
         // int counter = 0;
 
-        while (!bfs.empty()) {
+        // while (!bfs.empty()) {
+        while (!dfs.empty()) {
 
-            unsigned int idx = bfs.front();
-            bfs.pop();
+            unsigned int idx = dfs.top();
+            dfs.pop();
+            // unsigned int idx = bfs.front();
+            // bfs.pop();
 
             // counter++;
             if (map[idx] <= upper_cost_bound_ && map[idx] >= lower_cost_bound_ /*  && counter > sample_dist */) {
@@ -784,7 +791,8 @@ private:
 
                 if (!visited_flag[nbr] && map[nbr] <= upper_cost_bound_ /* && map[nbr] >= lower_cost_bound*/) {
                     visited_flag[nbr] = true;
-                    bfs.push(nbr);
+                    // bfs.push(nbr);
+                    dfs.push(nbr);
                 }
             }
         }
@@ -875,10 +883,13 @@ private:
                     }
                 }
             }
-
-            coverage_positions_sorted_.push_back(positions[best_next_idx]);
-            current_pos = positions[best_next_idx];
-            //RCLCPP_INFO(get_logger(), "Next goal: %f, %f; dist: %f", current_pos.x, current_pos.y, best_dist);
+            // safeguard to prohibit large jumps
+            // TODO: is this okay in all situations?
+            if (best_dist < 2.) {
+                coverage_positions_sorted_.push_back(positions[best_next_idx]);
+                current_pos = positions[best_next_idx];
+                //RCLCPP_INFO(get_logger(), "Next goal: %f, %f; dist: %f", current_pos.x, current_pos.y, best_dist);
+            }
             
             done++;
             planned[best_next_idx] = true;
