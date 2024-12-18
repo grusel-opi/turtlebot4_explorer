@@ -595,13 +595,15 @@ private:
         
         cheapTSP(positions);
 
-        for (unsigned int i = 0; i < coverage_positions_sorted_.size(); i++) {
+        unsigned int i;
+        int max = coverage_positions_sorted_.size();
+        for (i = 0; i < coverage_positions_sorted_.size() && i < max; i++) {
 
             std_msgs::msg::ColorRGBA color;
 
-            color.r = 1.0;
-            color.g = 0;
-            color.b = 0;
+            color.r = ((double) max - (double) i)/(double) max;
+            color.g = 0.;
+            color.b = (double) i / (double)max;
             color.a = 1.0;
 
             std::vector<visualization_msgs::msg::Marker> &markers = marker_array.markers;
@@ -616,21 +618,70 @@ private:
             m.id = i;
             m.type = visualization_msgs::msg::Marker::SPHERE;
             m.pose.position = coverage_positions_sorted_[i];
-            m.scale.x = 0.3;
-            m.scale.y = 0.3;
-            m.scale.z = 0.3;
+            m.scale.x = 0.1;
+            m.scale.y = 0.1;
+            m.scale.z = 0.1;
             m.color = color;
             markers.push_back(m);
         }
-        marker_array_publisher_->publish(marker_array);
-        RCLCPP_INFO(get_logger(), "published positions number: %ld", marker_array.markers.size());
-
 
         // check the heading of the coverage pattern (we want obstacles on the robots right hand side)
         geometry_msgs::msg::Point first_cov_pos = coverage_positions_sorted_[1]; // idx 0 is current pos
         geometry_msgs::msg::Point second_cov_pos = coverage_positions_sorted_[10];
         geometry_msgs::msg::Point dir_vec; // we abuse point structure as a vector here
         geometry_msgs::msg::Point query;
+
+        // --------------------------------------------------
+        std_msgs::msg::ColorRGBA color;
+
+        color.r = 0;
+        color.g = 1;
+        color.b = 0;
+        color.a = 1.0;
+
+        std::vector<visualization_msgs::msg::Marker> &markers = marker_array.markers;
+        visualization_msgs::msg::Marker m;
+
+        m.header.frame_id = "map";
+        m.header.stamp = this->now();
+        m.frame_locked = true;
+
+        m.action = visualization_msgs::msg::Marker::ADD;
+        m.ns = "grid_pattern";
+        m.id = i++;
+        m.type = visualization_msgs::msg::Marker::SPHERE;
+        m.pose.position = first_cov_pos;
+        m.scale.x = 0.15;
+        m.scale.y = 0.15;
+        m.scale.z = 0.15;
+        m.color = color;
+        markers.push_back(m);
+
+        color.r = 0;
+        color.g = 0.5;
+        color.b = 0.5;
+        color.a = 1.0;
+
+        m.header.frame_id = "map";
+        m.header.stamp = this->now();
+        m.frame_locked = true;
+
+        m.action = visualization_msgs::msg::Marker::ADD;
+        m.ns = "grid_pattern";
+        m.id = i++;
+        m.type = visualization_msgs::msg::Marker::SPHERE;
+        m.pose.position = second_cov_pos;
+        m.scale.x = 0.15;
+        m.scale.y = 0.15;
+        m.scale.z = 0.15;
+        m.color = color;
+        markers.push_back(m);
+
+
+        // ----------------------------------------------
+
+        marker_array_publisher_->publish(marker_array);
+        RCLCPP_INFO(get_logger(), "published positions number: %ld", marker_array.markers.size());
         
         dir_vec.x = -(second_cov_pos.y - first_cov_pos.y); // and rotate the vec 90 deg counter clockwise
         dir_vec.y = second_cov_pos.x - first_cov_pos.x;
@@ -839,7 +890,7 @@ private:
 };
 
 int main(int argc, char *argv[]) {
-   rclcpp::init(argc, argv);
+    rclcpp::init(argc, argv);
     auto explorer = std::make_shared<Explorer>();
     rclcpp::executors::MultiThreadedExecutor executor;
     executor.add_node(explorer);
