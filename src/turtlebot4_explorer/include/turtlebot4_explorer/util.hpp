@@ -4,10 +4,13 @@
 #include <vector>
 #include <array>
 #include <queue>
+#include <cmath>
+#include <math.h>
 
 #include "nav2_costmap_2d/costmap_2d.hpp"
 #include "nav2_costmap_2d/cost_values.hpp"
 #include "geometry_msgs/msg/point.hpp"
+#include "geometry_msgs/msg/quaternion.hpp"
 
 
 enum class ActionStatus
@@ -192,6 +195,25 @@ static std::array<unsigned char, 256> initTranslationTable() {
     cost_translation_table[static_cast<unsigned char>(-1)] = nav2_costmap_2d::NO_INFORMATION;
 
     return cost_translation_table;
+}
+
+void quat_to_euler(geometry_msgs::msg::Quaternion & q, std::array<double, 3> & euler) {
+    
+    double sinr_cosp = 2 * (q.w * q.x + q.y * q.z);
+    double cosr_cosp = 1 - 2 * (q.x * q.x + q.y * q.y);
+    double roll = std::atan2(sinr_cosp, cosr_cosp);
+
+    double sinp = std::sqrt(1 + 2 * (q.w * q.y - q.x * q.z));
+    double cosp = std::sqrt(1 - 2 * (q.w * q.y - q.x * q.z));
+    double pitch = 2 * std::atan2(sinp, cosp) - M_PI / 2;
+
+    double siny_cosp = 2 * (q.w * q.z + q.x * q.y);
+    double cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z);
+    double yaw = std::atan2(siny_cosp, cosy_cosp);
+
+    euler[0] = roll;
+    euler[1] = pitch;
+    euler[2] = yaw;
 }
 
 

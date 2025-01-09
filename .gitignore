@@ -1,2 +1,7 @@
 .clangd
 
+install
+log
+build
+
+map*
