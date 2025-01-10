@@ -737,7 +737,7 @@ private:
 
     bool dfsSampling(std::vector<geometry_msgs::msg::Point>& positions, nav2_costmap_2d::Costmap2D& costmap) {
 
-        const auto position = start_pose_->pose.pose.position;
+        const auto position = current_pose_->pose.pose.position;
         unsigned int mx, my;
 
         if (!costmap.worldToMap(position.x, position.y, mx, my)) {
@@ -760,8 +760,10 @@ private:
 
         RCLCPP_INFO(get_logger(), "start cost: %u", cost);
 
+        // TODO: implement proper dfs here
+
         while (cost > upper_cost_bound_ || cost < lower_cost_bound_) {
-            for (unsigned nbr : nhood4(pos_idx, costmap)) {
+            for (unsigned nbr : nhood8(pos_idx, costmap)) {
                 if ((cost > upper_cost_bound_ && map[nbr] <= cost) || (cost < lower_cost_bound_ && map[nbr] >= cost)) {
                     cost = map[nbr];
                     pos_idx = nbr;
