@@ -108,7 +108,7 @@ public:
         pose_navigator_->wait_for_action_server();
         waypoint_navigator_->wait_for_action_server();
 
-        RCLCPP_INFO(get_logger(), "Remembering start pose.");
+        RCLCPP_INFO(get_logger(), "Remembering start pose at (%f, %f), ", current_pose_->pose.pose.position.x, current_pose_->pose.pose.position.y);
         start_pose_->pose.pose.position = current_pose_->pose.pose.position;
         start_pose_->pose.pose.orientation = current_pose_->pose.pose.orientation;
 
@@ -555,7 +555,7 @@ private:
 
         auto request = std::make_shared<nav2_msgs::srv::GetCostmap::Request>();
         
-        RCLCPP_INFO(get_logger(), "waiting for /global_costmap/get_costmap sercive now..");
+        RCLCPP_INFO(get_logger(), "waiting for sercive /global_costmap/get_costmap");
         while (!get_global_costmap_client_->wait_for_service(1s)) {
             if (!rclcpp::ok()) {
                 RCLCPP_ERROR(get_logger(), "Interrupted while waiting for the service. Exiting.");
@@ -758,12 +758,12 @@ private:
         unsigned char cost = costmap.getCost(mx, my);
         unsigned int pos_idx = costmap.getIndex(mx, my);
 
-        RCLCPP_INFO(get_logger(), "start cost: %u", cost);
+        RCLCPP_INFO(get_logger(), "Starting dfsSampling at position (%f, %f) with start cost: %u", position.x, position.y, cost);
 
         // TODO: implement proper dfs here
 
         while (cost > upper_cost_bound_ || cost < lower_cost_bound_) {
-            for (unsigned nbr : nhood8(pos_idx, costmap)) {
+            for (unsigned int nbr : nhood8(pos_idx, costmap)) {
                 if ((cost > upper_cost_bound_ && map[nbr] <= cost) || (cost < lower_cost_bound_ && map[nbr] >= cost)) {
                     cost = map[nbr];
                     pos_idx = nbr;

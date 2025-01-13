@@ -34,10 +34,12 @@ include_directories(
   include
 )
 
-set(library_name wait_and_photo_at_waypoint)
-
-add_library(${library_name} SHARED
+add_library(wait_and_photo_at_waypoint SHARED
   src/wait_and_photo_at_waypoint.cpp
+)
+
+add_library(input_output_at_waypoint SHARED
+  src/input_output_at_waypoint.cpp
 )
 
 set(dependencies
@@ -56,13 +58,17 @@ set(dependencies
   OpenCV
 )
 
-ament_target_dependencies(${library_name}
+ament_target_dependencies(wait_and_photo_at_waypoint
   ${dependencies}
 )
 
-pluginlib_export_plugin_description_file(nav2_waypoint_follower waypoint_plugin.xml)
+ament_target_dependencies(input_output_at_waypoint
+  ${dependencies}
+)
 
-install(TARGETS ${library_name}
+pluginlib_export_plugin_description_file(nav2_waypoint_follower waypoint_plugins.xml)
+
+install(TARGETS wait_and_photo_at_waypoint input_output_at_waypoint
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -72,7 +78,7 @@ install(DIRECTORY include/
   DESTINATION include/
 )
 
-install(FILES waypoint_plugin.xml
+install(FILES waypoint_plugins.xml
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -89,7 +95,7 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_include_directories(include)
-ament_export_libraries(${library_name})
+ament_export_libraries(wait_and_photo_at_waypoint input_output_at_waypoint)
 ament_export_dependencies(${dependencies})
 
 ament_package()

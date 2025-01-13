@@ -1,0 +1,8 @@
+/turtlebot4_photographer:
+  ros__parameters:
+    map_path: "/home/mayerfel/ws/explore_ws/map"
+    min_size: 20
+    min_dist: 1.5
+    map_given: true
+    lower_cost_bound: 0
+    upper_cost_bound: 50

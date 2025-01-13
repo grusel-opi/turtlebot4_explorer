@@ -1,0 +1,12 @@
+<class_libraries>
+<library path="wait_and_photo_at_waypoint">
+	<class type="waypoint_plugin::WaitPhotoAtWaypoint" base_class_type="nav2_core::WaypointTaskExecutor">
+	  <description>Combining the waypoint plugins wait and take photo at waypoint (purpose of focus time for camera).</description>
+	</class>
+</library>
+<library path="input_output_at_waypoint">
+	<class type="waypoint_plugin::InputOutputAtWaypoint" base_class_type="nav2_core::WaypointTaskExecutor">
+	  <description>Outputting current waypoint pose then waiting for input (triggering photo then waiting for done signal).</description>
+	</class>
+</library>
+</class_libraries>

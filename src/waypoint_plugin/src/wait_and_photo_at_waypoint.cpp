@@ -131,51 +131,60 @@ void WaitPhotoAtWaypoint::initialize(const rclcpp_lifecycle::LifecycleNode::Weak
       }
     }
 
-    if (!std::filesystem::exists(save_dir_A_))
+    if (is_enabled_A_)
     {
-      RCLCPP_WARN(logger_,
-                  "Provided save directory for cam A at waypoint plugin does not exist,"
-                  "provided directory is: %s, the directory will be created automatically.",
-                  save_dir_A_.c_str());
-      if (!std::filesystem::create_directory(save_dir_A_))
+      if (!std::filesystem::exists(save_dir_A_))
       {
-        RCLCPP_ERROR(logger_,
-                     "Failed to create directory!: %s required by photo at waypoint plugin, "
-                     "exiting the plugin with failure!",
-                     save_dir_A_.c_str());
-        is_enabled_ = false;
+        RCLCPP_WARN(logger_,
+                    "Provided save directory for cam A at waypoint plugin does not exist,"
+                    "provided directory is: %s, the directory will be created automatically.",
+                    save_dir_A_.c_str());
+        if (!std::filesystem::create_directory(save_dir_A_))
+        {
+          RCLCPP_ERROR(logger_,
+                       "Failed to create directory!: %s required by photo at waypoint plugin, "
+                       "exiting the plugin with failure!",
+                       save_dir_A_.c_str());
+          is_enabled_ = false;
+        }
       }
     }
 
-    if (!std::filesystem::exists(save_dir_B_))
+    if (is_enabled_B_)
     {
-      RCLCPP_WARN(logger_,
-                  "Provided save directory for cam B at waypoint plugin does not exist,"
-                  "provided directory is: %s, the directory will be created automatically.",
-                  save_dir_B_.c_str());
-      if (!std::filesystem::create_directory(save_dir_B_))
+      if (!std::filesystem::exists(save_dir_B_))
       {
-        RCLCPP_ERROR(logger_,
-                     "Failed to create directory!: %s required by photo at waypoint plugin, "
-                     "exiting the plugin with failure!",
-                     save_dir_B_.c_str());
-        is_enabled_ = false;
+        RCLCPP_WARN(logger_,
+                    "Provided save directory for cam B at waypoint plugin does not exist,"
+                    "provided directory is: %s, the directory will be created automatically.",
+                    save_dir_B_.c_str());
+        if (!std::filesystem::create_directory(save_dir_B_))
+        {
+          RCLCPP_ERROR(logger_,
+                       "Failed to create directory!: %s required by photo at waypoint plugin, "
+                       "exiting the plugin with failure!",
+                       save_dir_B_.c_str());
+          is_enabled_ = false;
+        }
       }
     }
 
-    if (!std::filesystem::exists(save_dir_C_))
+    if (is_enabled_C_)
     {
-      RCLCPP_WARN(logger_,
-                  "Provided save directory for cam C at waypoint plugin does not exist,"
-                  "provided directory is: %s, the directory will be created automatically.",
-                  save_dir_C_.c_str());
-      if (!std::filesystem::create_directory(save_dir_C_))
+      if (!std::filesystem::exists(save_dir_C_))
       {
-        RCLCPP_ERROR(logger_,
-                     "Failed to create directory!: %s required by photo at waypoint plugin, "
-                     "exiting the plugin with failure!",
-                     save_dir_C_.c_str());
-        is_enabled_ = false;
+        RCLCPP_WARN(logger_,
+                    "Provided save directory for cam C at waypoint plugin does not exist,"
+                    "provided directory is: %s, the directory will be created automatically.",
+                    save_dir_C_.c_str());
+        if (!std::filesystem::create_directory(save_dir_C_))
+        {
+          RCLCPP_ERROR(logger_,
+                       "Failed to create directory!: %s required by photo at waypoint plugin, "
+                       "exiting the plugin with failure!",
+                       save_dir_C_.c_str());
+          is_enabled_ = false;
+        }
       }
     }
   }
@@ -234,69 +243,26 @@ bool WaitPhotoAtWaypoint::processAtWaypoint(const geometry_msgs::msg::PoseStampe
     return true;
   }
 
-  auto img_A_stamp = curr_frame_msg_A_->header.stamp;
-  auto img_B_stamp = curr_frame_msg_B_->header.stamp;
-  auto img_C_stamp = curr_frame_msg_C_->header.stamp;
-
   if (wait_at_waypoint_)
   {
-    RCLCPP_INFO(logger_, "Arrived at %i'th waypoint, waiting for %i images before saving picture..",
-                curr_waypoint_index, waypoint_pause_duration_);
+    RCLCPP_INFO(logger_, "Arrived at %i'th waypoint at pos (%f, %f), sleeping for %i ms before saving picture..",
+                curr_waypoint_index,
+                curr_pose.pose.position.x,
+                curr_pose.pose.position.y,
+                waypoint_pause_duration_);
 
     clock_->sleep_for(std::chrono::milliseconds(waypoint_pause_duration_));
   }
-
-  auto count = 0;
-  auto total_amount = image_amount_ * (is_enabled_A_ + is_enabled_B_ + is_enabled_C_);
-
-  // wait for new images..
-  do
-  {  // TODO: but maybe not like this..
-
-    if (is_enabled_A_)
-    {
-      if (curr_frame_msg_A_->header.stamp != img_A_stamp)
-      {
-        count++;
-        img_A_stamp = curr_frame_msg_A_->header.stamp;
-        RCLCPP_INFO(logger_, "Got %i of %i image(s)..", count, total_amount);
-      }
-    }
-
-    if (is_enabled_B_)
-    {
-      if (curr_frame_msg_B_->header.stamp != img_B_stamp)
-      {
-        count++;
-        img_B_stamp = curr_frame_msg_B_->header.stamp;
-        RCLCPP_INFO(logger_, "Got %i of %i image(s)..", count, total_amount);
-      }
-    }
-
-    if (is_enabled_C_)
-    {
-      if (curr_frame_msg_C_->header.stamp != img_C_stamp)
-      {
-        count++;
-        img_C_stamp = curr_frame_msg_C_->header.stamp;
-        RCLCPP_INFO(logger_, "Got %i of %i image(s)..", count, total_amount);
-      }
-    }
-
-    clock_->sleep_for(std::chrono::milliseconds(100));
-
-  } while (count < total_amount);
 
   if (is_enabled_A_)
   {
     try
     {
-      std::lock_guard<std::mutex> guard(global_mutex_A_);
-
-      std::filesystem::path file_name_A = std::to_string(curr_waypoint_index) + "_" +
-                                          std::to_string(curr_frame_msg_A_->header.stamp.sec) + "." + image_format_;
+      std::filesystem::path file_name_A =
+          std::to_string(curr_waypoint_index) + "_" + std::to_string(curr_pose.header.stamp.sec) + "." + image_format_;
       std::filesystem::path full_path_image_path_A = save_dir_A_ / file_name_A;
 
+      std::lock_guard<std::mutex> guard(global_mutex_A_);
       cv::Mat curr_frame_mat_A;
       deepCopyMsg2Mat(curr_frame_msg_A_, curr_frame_mat_A);
       cv::imwrite(full_path_image_path_A.c_str(), curr_frame_mat_A);
@@ -314,10 +280,11 @@ bool WaitPhotoAtWaypoint::processAtWaypoint(const geometry_msgs::msg::PoseStampe
   {
     try
     {
-      std::filesystem::path file_name_B = std::to_string(curr_waypoint_index) + "_" +
-                                          std::to_string(curr_frame_msg_B_->header.stamp.sec) + "." + image_format_;
+      std::filesystem::path file_name_B =
+          std::to_string(curr_waypoint_index) + "_" + std::to_string(curr_pose.header.stamp.sec) + "." + image_format_;
       std::filesystem::path full_path_image_path_B = save_dir_B_ / file_name_B;
 
+      std::lock_guard<std::mutex> guard(global_mutex_B_);
       cv::Mat curr_frame_mat_B;
       deepCopyMsg2Mat(curr_frame_msg_B_, curr_frame_mat_B);
       cv::imwrite(full_path_image_path_B.c_str(), curr_frame_mat_B);
@@ -336,10 +303,11 @@ bool WaitPhotoAtWaypoint::processAtWaypoint(const geometry_msgs::msg::PoseStampe
   {
     try
     {
-      std::filesystem::path file_name_C = std::to_string(curr_waypoint_index) + "_" +
-                                          std::to_string(curr_frame_msg_C_->header.stamp.sec) + "." + image_format_;
+      std::filesystem::path file_name_C =
+          std::to_string(curr_waypoint_index) + "_" + std::to_string(curr_pose.header.stamp.sec) + "." + image_format_;
       std::filesystem::path full_path_image_path_C = save_dir_C_ / file_name_C;
 
+      std::lock_guard<std::mutex> guard(global_mutex_C_);
       cv::Mat curr_frame_mat_C;
       deepCopyMsg2Mat(curr_frame_msg_C_, curr_frame_mat_C);
       cv::imwrite(full_path_image_path_C.c_str(), curr_frame_mat_C);
