@@ -21,60 +21,53 @@
  */
 #define _LIBCPP_NO_EXPERIMENTAL_DEPRECATION_WARNING_FILESYSTEM
 
-
+#include <exception>
 #include <filesystem>
 #include <mutex>
 #include <string>
-#include <exception>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 
-#include "sensor_msgs/msg/image.hpp"
+#include "cv_bridge/cv_bridge.h"
+#include "image_transport/image_transport.hpp"
 #include "nav2_core/waypoint_task_executor.hpp"
 #include "opencv4/opencv2/core.hpp"
 #include "opencv4/opencv2/opencv.hpp"
-#include "cv_bridge/cv_bridge.h"
-#include "image_transport/image_transport.hpp"
+#include "sensor_msgs/msg/image.hpp"
 
+namespace waypoint_plugin {
 
-namespace waypoint_plugin
-{
-
-class WaitPhotoAtWaypoint : public nav2_core::WaypointTaskExecutor
-{
+class WaitPhotoAtWaypoint : public nav2_core::WaypointTaskExecutor {
 public:
-  
   WaitPhotoAtWaypoint();
 
   ~WaitPhotoAtWaypoint();
 
-  void initialize(
-    const rclcpp_lifecycle::LifecycleNode::WeakPtr & parent,
-    const std::string & plugin_name);
+  void initialize(const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent,
+                  const std::string &plugin_name);
 
-  bool processAtWaypoint(const geometry_msgs::msg::PoseStamped & curr_pose, const int & curr_waypoint_index);
+  bool processAtWaypoint(const geometry_msgs::msg::PoseStamped &curr_pose,
+                         const int &curr_waypoint_index);
 
   void imageCallbackA(const sensor_msgs::msg::Image::SharedPtr msg);
   void imageCallbackB(const sensor_msgs::msg::Image::SharedPtr msg);
   void imageCallbackC(const sensor_msgs::msg::Image::SharedPtr msg);
 
-  static void deepCopyMsg2Mat(const sensor_msgs::msg::Image::SharedPtr & msg, cv::Mat & mat);
+  static void deepCopyMsg2Mat(const sensor_msgs::msg::Image::SharedPtr &msg,
+                              cv::Mat &mat);
 
 protected:
-
   bool is_enabled_;
   bool wait_at_waypoint_;
   int image_amount_;
   int waypoint_pause_duration_;
-
 
   rclcpp::Clock::SharedPtr clock_;
 
   std::string image_format_; // .png ? .jpg ? or some other well known format
 
   rclcpp::Logger logger_{rclcpp::get_logger("waypoint_plugin")};
-
 
   std::mutex global_mutex_A_;
   std::mutex global_mutex_B_;
@@ -96,12 +89,14 @@ protected:
   sensor_msgs::msg::Image::SharedPtr curr_frame_msg_B_;
   sensor_msgs::msg::Image::SharedPtr curr_frame_msg_C_;
 
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_image_subscriber_A_;
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_image_subscriber_B_;
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_image_subscriber_C_;
-
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
+      camera_image_subscriber_A_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
+      camera_image_subscriber_B_;
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
+      camera_image_subscriber_C_;
 };
 
-}
+} // namespace waypoint_plugin
 
 #endif
