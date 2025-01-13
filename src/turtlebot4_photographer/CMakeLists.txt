@@ -33,7 +33,7 @@ foreach (d ${deps})
   find_package(${d} REQUIRED)
 endforeach ()
 
-add_library(photographer_component src/photographer.cpp)
+add_library(photographer_component SHARED src/photographer.cpp)
 
 ament_target_dependencies(photographer_component ${deps})
 
