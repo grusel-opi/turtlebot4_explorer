@@ -20,7 +20,8 @@ namespace turtlebot4_photographer {
 
 class Photographer : public rclcpp::Node {
 public:
-  Photographer(const rclcpp::NodeOptions & options) : Node("turtlebot4_photographer", options) {
+  Photographer(const rclcpp::NodeOptions &options)
+      : Node("turtlebot4_photographer", options) {
     RCLCPP_INFO(get_logger(), "Turtlebot4 photographer startup.");
 
     curr_frame_msg_A_ = std::make_shared<sensor_msgs::msg::Image>();
@@ -31,8 +32,10 @@ public:
 
     declare_parameter("enabled", rclcpp::ParameterValue(true));
 
-    declare_parameter("trigger_topic",
-                      rclcpp::ParameterValue("/waypoint_follower/input_output_at_waypoint/output"));
+    declare_parameter(
+        "trigger_topic",
+        rclcpp::ParameterValue(
+            "/waypoint_follower/input_output_at_waypoint/output"));
 
     declare_parameter("waypoint_pause_duration", rclcpp::ParameterValue(0));
 
@@ -189,7 +192,7 @@ public:
         std::bind(&Photographer::triggerCallback, this, std::placeholders::_1));
 
     done_publisher_ = create_publisher<std_msgs::msg::Empty>(
-      "/waypoint_follower/input_output_at_waypoint/input", 10);
+        "/waypoint_follower/input_output_at_waypoint/input", 10);
 
     if (!is_enabled_) {
       RCLCPP_INFO(logger_, "Photo at waypoint plugin is disabled.");
@@ -241,8 +244,8 @@ public:
       RCLCPP_INFO(logger_,
                   "Arrived at waypoint at pos (%f, %f), sleeping for %i "
                   "ms before saving picture..",
-                  curr_pose.pose.position.x,
-                  curr_pose.pose.position.y, waypoint_pause_duration_);
+                  curr_pose.pose.position.x, curr_pose.pose.position.y,
+                  waypoint_pause_duration_);
 
       clock_->sleep_for(std::chrono::milliseconds(waypoint_pause_duration_));
     }
@@ -299,8 +302,7 @@ public:
         deepCopyMsg2Mat(curr_frame_msg_C_, curr_frame_mat_C);
         cv::imwrite(full_path_image_path_C.c_str(), curr_frame_mat_C);
 
-        RCLCPP_INFO(logger_,
-                    "Photos have been taken sucessfully at waypoint");
+        RCLCPP_INFO(logger_, "Photos have been taken sucessfully at waypoint");
       } catch (const std::exception &e) {
         RCLCPP_ERROR(
             logger_,
@@ -313,7 +315,6 @@ public:
     std_msgs::msg::Empty done_trigger;
 
     done_publisher_->publish(done_trigger);
-
   }
 
   void imageCallbackA(const sensor_msgs::msg::Image::SharedPtr msg) {
@@ -391,10 +392,11 @@ private:
 
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr done_publisher_;
 
-  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr trigger_subscriber_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr
+      trigger_subscriber_;
 };
 
-}
+} // namespace turtlebot4_photographer
 
 RCLCPP_COMPONENTS_REGISTER_NODE(turtlebot4_photographer::Photographer)
 
