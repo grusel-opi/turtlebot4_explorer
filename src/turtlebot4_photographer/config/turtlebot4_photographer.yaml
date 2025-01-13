@@ -1,5 +1,6 @@
 /turtlebot4_photographer:
   ros__parameters:
+<<<<<<< HEAD
     enabled: True
     enabledA: True
     enabledB: False
@@ -11,3 +12,11 @@
     image_format: "png"
     waypoint_pause_duration: 3000
 
+=======
+    map_path: "/home/mayerfel/ws/explore_ws/map"
+    min_size: 20
+    min_dist: 1.5
+    map_given: true
+    lower_cost_bound: 0
+    upper_cost_bound: 50
+>>>>>>> 8d5640e581620858575af6749a227e9b3b31310f
