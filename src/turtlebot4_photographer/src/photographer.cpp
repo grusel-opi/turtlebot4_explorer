@@ -32,7 +32,11 @@ public:
     declare_parameter("enabled", rclcpp::ParameterValue(true));
 
     declare_parameter("trigger_topic",
+<<<<<<< HEAD
                       rclcpp::ParameterValue("/waypoint_follower/input_output_at_waypoint/output"));
+=======
+                      rclcpp::ParameterValue("/photographer_trigger"));
+>>>>>>> 8d5640e581620858575af6749a227e9b3b31310f
 
     declare_parameter("waypoint_pause_duration", rclcpp::ParameterValue(0));
 
@@ -188,9 +192,12 @@ public:
         trigger_topic_, 1,
         std::bind(&Photographer::triggerCallback, this, std::placeholders::_1));
 
+<<<<<<< HEAD
     done_publisher_ = create_publisher<std_msgs::msg::Empty>(
       "/waypoint_follower/input_output_at_waypoint/input", 10);
 
+=======
+>>>>>>> 8d5640e581620858575af6749a227e9b3b31310f
     if (!is_enabled_) {
       RCLCPP_INFO(logger_, "Photo at waypoint plugin is disabled.");
     } else {
