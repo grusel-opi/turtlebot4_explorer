@@ -48,7 +48,7 @@ public:
     declare_parameter("enabledC", rclcpp::ParameterValue(true));
 
     declare_parameter("image_topic_A",
-                      rclcpp::ParameterValue("/camera_A/color/image_raw"));
+                      rclcpp::ParameterValue("/oakd/rgb/image_raw"));
 
     declare_parameter("image_topic_B",
                       rclcpp::ParameterValue("/camera_B/color/image_raw"));
