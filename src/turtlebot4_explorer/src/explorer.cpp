@@ -598,7 +598,7 @@ private:
         std::vector<geometry_msgs::msg::Point> positions;
         coverage_positions_sorted_.clear();
 
-        if (!dfsSampling(positions, costmap)) {
+        if (!costmapWalkSampling(positions, costmap)) {
             RCLCPP_ERROR(get_logger(), "Error calculating coverage poses!");
             return;
         }
@@ -610,9 +610,9 @@ private:
         // executeCoverage();
     }
 
-    bool dfsSampling(std::vector<geometry_msgs::msg::Point>& positions, nav2_costmap_2d::Costmap2D& costmap) {
+    bool costmapWalkSampling(std::vector<geometry_msgs::msg::Point>& positions, nav2_costmap_2d::Costmap2D& costmap) {
 
-        const auto position = current_pose_->pose.pose.position;
+        const auto position = start_pose_->pose.pose.position;
         unsigned int mx, my;
 
         if (!costmap.worldToMap(position.x, position.y, mx, my)) {
@@ -627,18 +627,15 @@ private:
         std::vector<bool> frontier_flag(costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
         std::vector<bool> visited_flag(costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
         
-        // std::queue<unsigned int> bfs;
         std::stack<unsigned int> dfs;
 
         unsigned char cost = costmap.getCost(mx, my);
         unsigned int pos_idx = costmap.getIndex(mx, my);
 
-        RCLCPP_INFO(get_logger(), "Starting dfsSampling at position (%f, %f) with start cost: %u", position.x, position.y, cost);
-
-        // TODO: implement proper dfs here
+        RCLCPP_INFO(get_logger(), "start cost: %u", cost);
 
         while (cost > upper_cost_bound_ || cost < lower_cost_bound_) {
-            for (unsigned int nbr : nhood8(pos_idx, costmap)) {
+            for (unsigned nbr : nhood4(pos_idx, costmap)) {
                 if ((cost > upper_cost_bound_ && map[nbr] <= cost) || (cost < lower_cost_bound_ && map[nbr] >= cost)) {
                     cost = map[nbr];
                     pos_idx = nbr;
@@ -648,40 +645,29 @@ private:
 
         RCLCPP_INFO(get_logger(), "new cost: %u", cost);
 
-        // bfs.push(pos_idx);
         dfs.push(pos_idx);
 
         geometry_msgs::msg::Point pos;
         costmap.indexToCells(pos_idx, mx, my);
         costmap.mapToWorld(mx, my, pos.x, pos.y);
 
-        // visited_flag[bfs.front()] = true;
         visited_flag[dfs.top()] = true;
 
-        // int sample_dist = 10;
-        // int counter = 0;
-
-        // while (!bfs.empty()) {
         while (!dfs.empty()) {
 
             unsigned int idx = dfs.top();
             dfs.pop();
-            // unsigned int idx = bfs.front();
-            // bfs.pop();
 
-            // counter++;
-            if (map[idx] <= upper_cost_bound_ && map[idx] >= lower_cost_bound_ /*  && counter > sample_dist */) {
+            if (map[idx] <= upper_cost_bound_ && map[idx] >= lower_cost_bound_ ) {
                 costmap.indexToCells(idx, mx, my);
                 costmap.mapToWorld(mx, my, pos.x, pos.y);
                 positions.push_back(pos);
-                // counter = 0;
             }
 
-            for (unsigned nbr : nhood4(idx, costmap)) {
+            for (unsigned nbr : nhood8(idx, costmap)) {
 
-                if (!visited_flag[nbr] && map[nbr] <= upper_cost_bound_ /* && map[nbr] >= lower_cost_bound*/) {
+                if (!visited_flag[nbr] && map[nbr] <= upper_cost_bound_) {
                     visited_flag[nbr] = true;
-                    // bfs.push(nbr);
                     dfs.push(nbr);
                 }
             }
@@ -689,13 +675,20 @@ private:
         return true;
     }
 
-
     void executeCoverageViaWaypoints() {
 
         std::array<double, 4> orientations_deg {0., 90., 180., 270.};
 
         std::vector<geometry_msgs::msg::PoseStamped> waypoint_poses;
         for (const auto & p : coverage_positions_sorted_) {
+
+
+            // for single pose (eg. 360 camera)
+            // geometry_msgs::msg::PoseStamped waypoint_pose;
+            // waypoint_pose.pose.position = p;
+            // waypoint_pose.header.frame_id = "map";
+            // waypoint_poses.push_back(waypoint_pose);
+
             for (const auto & o : orientations_deg) {
                 geometry_msgs::msg::PoseStamped waypoint_pose;
                 waypoint_pose.pose.position = p;
@@ -706,7 +699,6 @@ private:
                 waypoint_poses.push_back(waypoint_pose);
             }
         }
-
 
         int max = waypoint_poses.size();
         for (unsigned int i = 0; i < max; i++) {

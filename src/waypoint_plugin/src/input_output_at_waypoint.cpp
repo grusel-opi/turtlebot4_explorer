@@ -44,20 +44,33 @@ void InputOutputAtWaypoint::initialize(
 
   double timeout;
   std::string input_topic;
+  // std::string input_topic_B;
+  // std::string input_topic_C;
   std::string output_topic;
 
   nav2_util::declare_parameter_if_not_declared(node, plugin_name + ".timeout",
                                                rclcpp::ParameterValue(10.0));
   nav2_util::declare_parameter_if_not_declared(node, plugin_name + ".enabled",
                                                rclcpp::ParameterValue(true));
+
   nav2_util::declare_parameter_if_not_declared(
       node, plugin_name + ".input_topic",
       rclcpp::ParameterValue("input_output_at_waypoint/input"));
+
+  // nav2_util::declare_parameter_if_not_declared(
+  //     node, plugin_name + ".input_topic_B",
+  //     rclcpp::ParameterValue("input_output_at_waypoint/input_B"));
+
+  // nav2_util::declare_parameter_if_not_declared(
+  //     node, plugin_name + ".input_topic_C",
+  //     rclcpp::ParameterValue("input_output_at_waypoint/input_C"));
+  
   nav2_util::declare_parameter_if_not_declared(
       node, plugin_name + ".output_topic",
       rclcpp::ParameterValue("input_output_at_waypoint/output"));
 
   timeout = node->get_parameter(plugin_name + ".timeout").as_double();
+
   node->get_parameter(plugin_name + ".enabled", is_enabled_);
   node->get_parameter(plugin_name + ".input_topic", input_topic);
   node->get_parameter(plugin_name + ".output_topic", output_topic);
@@ -73,7 +86,7 @@ void InputOutputAtWaypoint::initialize(
   publisher_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
       "input_output_at_waypoint/output", 10);
 
-  subscription_ = node->create_subscription<std_msgs::msg::Empty>(
+  subscription_A_ = node->create_subscription<std_msgs::msg::Empty>(
       input_topic, 1, std::bind(&InputOutputAtWaypoint::Cb, this, _1));
 }
 

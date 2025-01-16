@@ -48,10 +48,16 @@ protected:
   bool input_received_;
   bool is_enabled_;
   rclcpp::Duration timeout_;
+  
   rclcpp::Logger logger_{rclcpp::get_logger("waypoint_plugin")};
   rclcpp::Clock::SharedPtr clock_;
+  
   std::mutex mutex_;
-  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr subscription_;
+
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr subscription_A_;
+  // rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr subscription_B_;
+  // rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr subscription_C_;
+
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr publisher_;
 
 };
