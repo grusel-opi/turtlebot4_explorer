@@ -39,7 +39,7 @@ def generate_launch_description():
         name='turtlebot4_photographer_container',
         namespace='',
         package='rclcpp_components',
-        executable='component_container',
+        executable='component_container_mt',
         composable_node_descriptions=[
             ComposableNode(
                 package='turtlebot4_photographer',

@@ -4,5 +4,7 @@
     min_size: 20
     min_dist: 1.5
     map_given: true
-    lower_cost_bound: 5
-    upper_cost_bound: 50
+    lower_cost_bound: 0
+    upper_cost_bound: 5
+    coverage_orientations: [0., 45., 90., 135., 180., 225., 270., 315.]
+    coverage_pose_distance: 0.75

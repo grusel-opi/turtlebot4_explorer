@@ -49,7 +49,7 @@ void InputOutputAtWaypoint::initialize(
   std::string output_topic;
 
   nav2_util::declare_parameter_if_not_declared(node, plugin_name + ".timeout",
-                                               rclcpp::ParameterValue(10.0));
+                                               rclcpp::ParameterValue(20.0));
   nav2_util::declare_parameter_if_not_declared(node, plugin_name + ".enabled",
                                                rclcpp::ParameterValue(true));
 
