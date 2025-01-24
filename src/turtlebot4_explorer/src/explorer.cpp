@@ -608,6 +608,25 @@ private:
 
   void calculateCoverage() {
 
+    std::vector<geometry_msgs::msg::Point> positions;
+    coverage_positions_sorted_.clear();
+
+    if (!costmapWalkSampling(positions)) {
+      RCLCPP_ERROR(get_logger(), "Error calculating coverage poses!");
+      return;
+    }
+
+    cheapTSP(positions);
+
+    // simpleBoustrophedonOrdering();
+    backAndForthOrdering();
+
+    // executeStarPatternCoverageViaWaypoints();
+    executeCoverage();
+  }
+
+  bool costmapWalkSampling(std::vector<geometry_msgs::msg::Point> &positions) {
+
     auto request = std::make_shared<nav2_msgs::srv::GetCostmap::Request>();
 
     RCLCPP_INFO(get_logger(),
@@ -616,7 +635,7 @@ private:
       if (!rclcpp::ok()) {
         RCLCPP_ERROR(get_logger(),
                      "Interrupted while waiting for the service. Exiting.");
-        return;
+        return false;
       }
       RCLCPP_INFO(get_logger(), "service not available, waiting again 1s...");
     }
@@ -625,10 +644,10 @@ private:
 
     auto result = get_global_costmap_client_->async_send_request(request);
 
-    auto status = result.wait_for(5s); // 5s should be very generous
+    auto status = result.wait_for(5s); // 5s should be generous
     if (status != std::future_status::ready) {
       RCLCPP_ERROR(get_logger(), "Houston weve had a problem!");
-      return;
+      return false;
     }
 
     RCLCPP_INFO(get_logger(), "success!");
@@ -648,23 +667,6 @@ private:
       costmap_data[i] = map.data[i];
     }
 
-    std::vector<geometry_msgs::msg::Point> positions;
-    coverage_positions_sorted_.clear();
-
-    if (!costmapWalkSampling(positions, costmap)) {
-      RCLCPP_ERROR(get_logger(), "Error calculating coverage poses!");
-      return;
-    }
-
-    cheapTSP(positions);
-
-    executeCoverageViaWaypoints();
-    // executeCoverage();
-  }
-
-  bool costmapWalkSampling(std::vector<geometry_msgs::msg::Point> &positions,
-                           nav2_costmap_2d::Costmap2D &costmap) {
-
     const auto position = start_pose_->pose.pose.position;
     unsigned int mx, my;
 
@@ -677,7 +679,7 @@ private:
     std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(
         *(costmap.getMutex()));
 
-    auto map = costmap.getCharMap();
+    auto char_map = costmap.getCharMap();
 
     std::vector<bool> frontier_flag(
         costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
@@ -692,10 +694,10 @@ private:
     RCLCPP_INFO(get_logger(), "start cost: %u", cost);
 
     while (cost > upper_cost_bound_ || cost < lower_cost_bound_) {
-      for (unsigned nbr : nhood4(pos_idx, costmap)) {
-        if ((cost > upper_cost_bound_ && map[nbr] <= cost) ||
-            (cost < lower_cost_bound_ && map[nbr] >= cost)) {
-          cost = map[nbr];
+      for (unsigned nbr : nhood8(pos_idx, costmap)) {
+        if ((cost > upper_cost_bound_ && char_map[nbr] <= cost) ||
+            (cost < lower_cost_bound_ && char_map[nbr] >= cost)) {
+          cost = char_map[nbr];
           pos_idx = nbr;
         }
       }
@@ -716,7 +718,8 @@ private:
       unsigned int idx = dfs.top();
       dfs.pop();
 
-      if (map[idx] <= upper_cost_bound_ && map[idx] >= lower_cost_bound_) {
+      if (char_map[idx] <= upper_cost_bound_ &&
+          char_map[idx] >= lower_cost_bound_) {
         costmap.indexToCells(idx, mx, my);
         costmap.mapToWorld(mx, my, pos.x, pos.y);
         positions.push_back(pos);
@@ -724,7 +727,7 @@ private:
 
       for (unsigned nbr : nhood8(idx, costmap)) {
 
-        if (!visited_flag[nbr] && map[nbr] <= upper_cost_bound_) {
+        if (!visited_flag[nbr] && char_map[nbr] <= upper_cost_bound_) {
           visited_flag[nbr] = true;
           dfs.push(nbr);
         }
@@ -733,7 +736,7 @@ private:
     return true;
   }
 
-  void executeCoverageViaWaypoints() {
+  void executeStarPatternCoverageViaWaypoints() {
 
     for (const auto &p : coverage_positions_sorted_) {
       for (const auto &o : coverage_orientations_deg_) {
@@ -810,8 +813,7 @@ private:
         RCLCPP_INFO(get_logger(), "[RESULT] Goal result: SUCCEEDED.");
         break;
       case rclcpp_action::ResultCode::ABORTED:
-        RCLCPP_ERROR(get_logger(),
-                     "[RESULT] Goal result: aborted.");
+        RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: aborted.");
         break;
       case rclcpp_action::ResultCode::CANCELED:
         RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: canceled.");
@@ -829,6 +831,7 @@ private:
                     waypoint_poses_[idx].pose.position.x,
                     waypoint_poses_[idx].pose.position.y, euler[2]);
       }
+      returnToStartPose();
     };
 
     RCLCPP_INFO(get_logger(), "[REQUEST] Sending goals to waypoint navigator.");
@@ -836,7 +839,52 @@ private:
         waypoint_navigator_->async_send_goal(goal, send_goal_options);
   }
 
+  void returnToStartPose() {
+    RCLCPP_INFO(get_logger(), "Returning to start position.");
+
+    auto goal = NavAction::Goal();
+    goal.pose.pose.position = start_pose_->pose.pose.position;
+    goal.pose.pose.orientation = start_pose_->pose.pose.orientation;
+    goal.behavior_tree =
+        "/home/mayerfel/ws/autonomous_acquisition/bt/nav2home.xml";
+    goal.pose.header.frame_id = "map";
+
+    auto send_goal_options = NavClient::SendGoalOptions();
+    send_goal_options.goal_response_callback = [this](const auto msg) {
+      if (msg) {
+        RCLCPP_INFO(get_logger(), "Return to start goal accepted by server.");
+      } else {
+        RCLCPP_ERROR(get_logger(),
+                     "Return to start goal was rejected by server.");
+      }
+    };
+
+    send_goal_options.result_callback = [this](const auto result) {
+      switch (result.code) {
+      case rclcpp_action::ResultCode::SUCCEEDED:
+        RCLCPP_INFO(get_logger(), "Return to start goal result: reached.");
+        break;
+      case rclcpp_action::ResultCode::ABORTED:
+        RCLCPP_ERROR(get_logger(), "Return to start goal result: aborted");
+        break;
+      case rclcpp_action::ResultCode::CANCELED:
+        RCLCPP_ERROR(get_logger(), "Return to start goal result: canceled.");
+        break;
+      default:
+        RCLCPP_ERROR(get_logger(), "Return to start goal result: Unknown");
+        break;
+      }
+    };
+
+    RCLCPP_INFO(get_logger(), "Sending return to home goal %f,%f",
+                goal.pose.pose.position.x, goal.pose.pose.position.y);
+    auto return_goal_handle =
+        pose_navigator_->async_send_goal(goal, send_goal_options);
+  }
+
   void executeCoverage() {
+
+    RCLCPP_INFO(get_logger(), "[executeCoverage]");
 
     geometry_msgs::msg::Point next_goal =
         coverage_positions_sorted_[current_coverage_pose_nr_];
@@ -902,6 +950,7 @@ private:
                     "[executeCoverage] Seems like coverage is completed! "
                     "current_coverage_pose_nr_: %d",
                     current_coverage_pose_nr_);
+        returnToStartPose();
       }
     };
 
@@ -911,11 +960,107 @@ private:
         pose_navigator_->async_send_goal(goal, send_goal_options);
   }
 
+  void backAndForthOrdering() {
+
+    RCLCPP_INFO(get_logger(), "[backAndForthOrdering]");
+
+    std::vector<geometry_msgs::msg::Point> back_and_forth;
+    unsigned int n = coverage_positions_sorted_.size();
+
+    for (unsigned i = 0; i < n; i++) {
+      back_and_forth.push_back(coverage_positions_sorted_[i]);
+    }
+    for (unsigned i = n - 1; i > 0; i--) {
+      back_and_forth.push_back(coverage_positions_sorted_[i]);
+    }
+
+    coverage_positions_sorted_ = back_and_forth;
+
+    int max = coverage_positions_sorted_.size();
+    for (unsigned int i = 0; i < max; i++) {
+
+      std_msgs::msg::ColorRGBA color;
+
+      color.r = ((double)max - (double)i) / (double)max;
+      color.g = 0.;
+      color.b = (double)i / (double)max;
+      color.a = 1.0;
+
+      std::vector<visualization_msgs::msg::Marker> &markers =
+          marker_array_.markers;
+      visualization_msgs::msg::Marker m;
+
+      m.header.frame_id = "map";
+      m.header.stamp = this->now();
+      m.frame_locked = true;
+
+      m.action = visualization_msgs::msg::Marker::ADD;
+      m.ns = "grid_pattern";
+      m.id = i;
+      m.type = visualization_msgs::msg::Marker::ARROW;
+      m.pose.position = coverage_positions_sorted_[i];
+      m.scale.x = 0.15;
+      m.scale.y = 0.05;
+      m.scale.z = 0.05;
+      m.color = color;
+      markers.push_back(m);
+    }
+    marker_array_publisher_->publish(marker_array_);
+    RCLCPP_INFO(get_logger(), "published poses number: %ld",
+                marker_array_.markers.size());
+  }
+
+  void simpleBoustrophedonOrdering() {
+
+    std::vector<geometry_msgs::msg::Point> boustrophedon_coverage_points;
+    unsigned int n = coverage_positions_sorted_.size();
+
+    for (unsigned i = 0; i < n / 2; i++) {
+      boustrophedon_coverage_points.push_back(coverage_positions_sorted_[i]);
+      boustrophedon_coverage_points.push_back(
+          coverage_positions_sorted_[n - i]);
+    }
+    coverage_positions_sorted_ = boustrophedon_coverage_points;
+
+    int max = coverage_positions_sorted_.size();
+    for (unsigned int i = 0; i < max; i++) {
+
+      std_msgs::msg::ColorRGBA color;
+
+      color.r = ((double)max - (double)i) / (double)max;
+      color.g = 0.;
+      color.b = (double)i / (double)max;
+      color.a = 1.0;
+
+      std::vector<visualization_msgs::msg::Marker> &markers =
+          marker_array_.markers;
+      visualization_msgs::msg::Marker m;
+
+      m.header.frame_id = "map";
+      m.header.stamp = this->now();
+      m.frame_locked = true;
+
+      m.action = visualization_msgs::msg::Marker::ADD;
+      m.ns = "grid_pattern";
+      m.id = i;
+      m.type = visualization_msgs::msg::Marker::ARROW;
+      m.pose.position = coverage_positions_sorted_[i];
+      m.scale.x = 0.15;
+      m.scale.y = 0.05;
+      m.scale.z = 0.05;
+      m.color = color;
+      markers.push_back(m);
+    }
+    marker_array_publisher_->publish(marker_array_);
+    RCLCPP_INFO(get_logger(), "published poses number: %ld",
+                marker_array_.markers.size());
+  }
+
   void cheapTSP(std::vector<geometry_msgs::msg::Point> &positions) {
 
-    geometry_msgs::msg::Point current_pos = current_pose_->pose.pose.position;
+    RCLCPP_INFO(get_logger(), "[cheapTSP]");
 
-    coverage_positions_sorted_.push_back(current_pos);
+    geometry_msgs::msg::Point current_pos = current_pose_->pose.pose.position;
 
     int best_next_idx = 0;
     double best_dist = 10e10f;
@@ -947,8 +1092,6 @@ private:
       planned[best_next_idx] = true;
       best_dist = 10e10f;
     }
-
-    coverage_positions_sorted_.push_back(current_pose_->pose.pose.position);
   }
 };
 
