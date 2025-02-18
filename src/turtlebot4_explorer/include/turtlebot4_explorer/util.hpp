@@ -141,7 +141,7 @@ std::vector<unsigned int> nhood8(unsigned int idx, const nav2_costmap_2d::Costma
 }
 
 
-bool nearestCell(unsigned int &result, unsigned int start, unsigned char val, const nav2_costmap_2d::Costmap2D& costmap) {
+bool nearestCell(unsigned int &result, unsigned int start, unsigned char lower_val, unsigned char upper_val,  const nav2_costmap_2d::Costmap2D& costmap) {
 
     const unsigned char* map = costmap.getCharMap();
     const unsigned int size_x = costmap.getSizeInCellsX(), size_y = costmap.getSizeInCellsY();
@@ -162,7 +162,7 @@ bool nearestCell(unsigned int &result, unsigned int start, unsigned char val, co
         unsigned int idx = bfs.front();
         bfs.pop();
 
-        if (map[idx] == val)
+        if (map[idx] <= upper_val && map[idx] >= lower_val)
         {
             result = idx;
             return true;

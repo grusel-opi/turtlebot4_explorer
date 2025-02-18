@@ -5,6 +5,7 @@
 
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "nav2_costmap_2d/costmap_2d.hpp"
+#include "nav2_msgs/action/compute_path_through_poses.hpp"
 #include "nav2_msgs/action/follow_waypoints.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/srv/get_costmap.hpp"
@@ -269,7 +270,8 @@ private:
     unsigned int pos = costmap_.getIndex(mx, my);
     unsigned int start;
 
-    if (nearestCell(start, pos, nav2_costmap_2d::FREE_SPACE, costmap_)) {
+    if (nearestCell(start, pos, nav2_costmap_2d::FREE_SPACE,
+                    nav2_costmap_2d::FREE_SPACE, costmap_)) {
       bfs.push(start);
     } else {
       bfs.push(pos);
@@ -622,7 +624,8 @@ private:
     backAndForthOrdering();
 
     // executeStarPatternCoverageViaWaypoints();
-    executeCoverage();
+    // executeCoverage();
+    executeCoverageComputePathThroughPoses();
   }
 
   bool costmapWalkSampling(std::vector<geometry_msgs::msg::Point> &positions) {
@@ -661,17 +664,19 @@ private:
     costmap.resizeMap(meta_data.size_x, meta_data.size_y, meta_data.resolution,
                       meta_data.origin.position.x, meta_data.origin.position.y);
 
+    RCLCPP_INFO(get_logger(), "success!");
+
     unsigned char *costmap_data = costmap.getCharMap();
     size_t costmap_size = costmap.getSizeInCellsX() * costmap.getSizeInCellsY();
     for (size_t i = 0; i < costmap_size && i < map.data.size(); ++i) {
       costmap_data[i] = map.data[i];
     }
 
-    const auto position = start_pose_->pose.pose.position;
+    const auto position = current_pose_->pose.pose.position;
     unsigned int mx, my;
 
     if (!costmap.worldToMap(position.x, position.y, mx, my)) {
-      RCLCPP_ERROR(get_logger(), "Robot start position out of costmap bounds, "
+      RCLCPP_ERROR(get_logger(), "Robot position out of costmap bounds, "
                                  "should not be possible..");
       return false;
     }
@@ -686,26 +691,28 @@ private:
     std::vector<bool> visited_flag(
         costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
 
-    std::stack<unsigned int> dfs;
-
     unsigned char cost = costmap.getCost(mx, my);
     unsigned int pos_idx = costmap.getIndex(mx, my);
 
     RCLCPP_INFO(get_logger(), "start cost: %u", cost);
 
-    while (cost > upper_cost_bound_ || cost < lower_cost_bound_) {
-      for (unsigned nbr : nhood8(pos_idx, costmap)) {
-        if ((cost > upper_cost_bound_ && char_map[nbr] <= cost) ||
-            (cost < lower_cost_bound_ && char_map[nbr] >= cost)) {
-          cost = char_map[nbr];
-          pos_idx = nbr;
-        }
+    unsigned int start;
+    std::stack<unsigned int> dfs;
+
+    if (cost > upper_cost_bound_ || cost < lower_cost_bound_) {
+      if (nearestCell(start, pos_idx, lower_cost_bound_, upper_cost_bound_,
+                      costmap)) {
+        RCLCPP_INFO(get_logger(), "new cost: %u", cost);
+        dfs.push(start);
+      } else {
+        RCLCPP_ERROR(
+            get_logger(),
+            "Could not find nearby clear cell to start costmap sampling");
+        return false;
       }
+    } else {
+      dfs.push(pos_idx);
     }
-
-    RCLCPP_INFO(get_logger(), "new cost: %u", cost);
-
-    dfs.push(pos_idx);
 
     geometry_msgs::msg::Point pos;
     costmap.indexToCells(pos_idx, mx, my);
@@ -880,6 +887,106 @@ private:
                 goal.pose.pose.position.x, goal.pose.pose.position.y);
     auto return_goal_handle =
         pose_navigator_->async_send_goal(goal, send_goal_options);
+  }
+
+  void executeCoverageComputePathThroughPoses() {
+
+    RCLCPP_INFO(get_logger(), "[executeCoverageComputePathThroughPoses]");
+
+    std::vector<geometry_msgs::msg::PoseStamped> goal_poses;
+    for (int i = 0; i < coverage_positions_sorted_.size(); i++) {
+
+      double x =
+          coverage_positions_sorted_[i + 1].x - coverage_positions_sorted_[i].x;
+      double y =
+          coverage_positions_sorted_[i + 1].y - coverage_positions_sorted_[i].y;
+
+      double yaw = std::atan2(y, x);
+      tf2::Quaternion q;
+      q.setRPY(0, 0, yaw);
+      geometry_msgs::msg::Quaternion q_msg;
+      tf2::fromMsg(q_msg, q);
+
+
+      geometry_msgs::msg::PoseStamped waypoint_pose;
+      waypoint_pose.pose.position = coverage_positions_sorted_[i];
+      waypoint_pose.pose.orientation = q_msg;
+
+      waypoint_pose.header.frame_id = "map";
+
+      goal_poses.push_back(waypoint_pose);
+    }
+
+    int max = goal_poses.size();
+    for (unsigned int i = 0; i < max; i++) {
+
+      std_msgs::msg::ColorRGBA color;
+
+      color.r = ((double)max - (double)i) / (double)max;
+      color.g = 0.;
+      color.b = (double)i / (double)max;
+      color.a = 1.0;
+
+      std::vector<visualization_msgs::msg::Marker> &markers =
+          marker_array_.markers;
+      visualization_msgs::msg::Marker m;
+
+      m.header.frame_id = "map";
+      m.header.stamp = this->now();
+      m.frame_locked = true;
+
+      m.action = visualization_msgs::msg::Marker::ADD;
+      m.ns = "path";
+      m.id = i;
+      m.type = visualization_msgs::msg::Marker::ARROW;
+      m.pose = goal_poses[i].pose;
+      m.scale.x = 0.15;
+      m.scale.y = 0.05;
+      m.scale.z = 0.05;
+      m.color = color;
+      markers.push_back(m);
+    }
+
+    marker_array_publisher_->publish(marker_array_);
+    RCLCPP_INFO(get_logger(), "published poses number: %ld",
+                marker_array_.markers.size());
+
+    rclcpp_action::Client<nav2_msgs::action::ComputePathThroughPoses>::SharedPtr
+        compute_through_poses_client = rclcpp_action::create_client<
+            nav2_msgs::action::ComputePathThroughPoses>(
+            this, "/compute_path_through_poses");
+
+    compute_through_poses_client->wait_for_action_server();
+
+    auto goal = nav2_msgs::action::ComputePathThroughPoses::Goal();
+
+    goal.goals = goal_poses;
+    goal.use_start = false;
+    goal.planner_id = "GridBased";
+
+    auto send_goal_options = rclcpp_action::Client<nav2_msgs::action::ComputePathThroughPoses>::SendGoalOptions();
+
+    send_goal_options.goal_response_callback = [this](const auto &goal_handle) {
+      if (goal_handle) {
+        RCLCPP_INFO(get_logger(), "[RESPONSE] Goal accepted by server.");
+      } else {
+        RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
+      }
+    };
+
+    send_goal_options.result_callback = [this](const auto &result) {
+      
+      RCLCPP_INFO(get_logger(), "[RESULT] number of poses: %lu",
+                  result.result->path.poses.size());
+    };
+
+    RCLCPP_INFO(get_logger(), "[REQUEST] Computing path through goals..");
+
+    std::shared_future<rclcpp_action::ClientGoalHandle<
+        nav2_msgs::action::ComputePathThroughPoses>::SharedPtr>
+        compute_through_poses_client_future_goal_handle_ =
+            compute_through_poses_client->async_send_goal(goal,
+                                                          send_goal_options);
   }
 
   void executeCoverage() {
