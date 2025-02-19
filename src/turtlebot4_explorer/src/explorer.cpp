@@ -6,10 +6,12 @@
 #include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
 #include "nav2_costmap_2d/costmap_2d.hpp"
 #include "nav2_msgs/action/compute_path_through_poses.hpp"
+#include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/follow_waypoints.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/srv/get_costmap.hpp"
 #include "nav_msgs/msg/occupancy_grid.hpp"
+#include "nav_msgs/msg/path.hpp"
 #include "nav_msgs/srv/get_map.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -30,6 +32,10 @@ using NavAction = nav2_msgs::action::NavigateToPose;
 using NavClient = rclcpp_action::Client<NavAction>;
 using WaypointAction = nav2_msgs::action::FollowWaypoints;
 using WaypointClient = rclcpp_action::Client<WaypointAction>;
+using ComputePathAction = nav2_msgs::action::ComputePathThroughPoses;
+using ComputePathClient = rclcpp_action::Client<ComputePathAction>;
+using FollowPathAction = nav2_msgs::action::FollowPath;
+using FollowPathClient = rclcpp_action::Client<FollowPathAction>;
 
 class Explorer : public rclcpp::Node {
 public:
@@ -79,6 +85,13 @@ public:
     waypoint_navigator_ =
         rclcpp_action::create_client<WaypointAction>(this, "/follow_waypoints");
 
+    path_follower_ =
+        rclcpp_action::create_client<nav2_msgs::action::FollowPath>(
+            this, "/follow_path");
+
+    path_computer_ = rclcpp_action::create_client<ComputePathAction>(
+        this, "/compute_path_through_poses");
+
     pose_subscription_ =
         create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
             pose_topic_, 10,
@@ -119,6 +132,8 @@ public:
     RCLCPP_INFO(get_logger(), "Waiting for nav2 stack..");
     pose_navigator_->wait_for_action_server();
     waypoint_navigator_->wait_for_action_server();
+    path_follower_->wait_for_action_server();
+    path_computer_->wait_for_action_server();
 
     RCLCPP_INFO(get_logger(), "Remembering start pose at (%f, %f), ",
                 current_pose_->pose.pose.position.x,
@@ -140,11 +155,19 @@ private:
 
   NavClient::SharedPtr pose_navigator_;
   WaypointClient::SharedPtr waypoint_navigator_;
+  FollowPathClient::SharedPtr path_follower_;
+  ComputePathClient::SharedPtr path_computer_;
 
   std::shared_future<rclcpp_action::ClientGoalHandle<NavAction>::SharedPtr>
       nav_action_future_goal_handle_;
   std::shared_future<rclcpp_action::ClientGoalHandle<WaypointAction>::SharedPtr>
       waypoint_future_goal_handle_;
+  std::shared_future<
+      rclcpp_action::ClientGoalHandle<FollowPathAction>::SharedPtr>
+      follow_path_future_goal_handle_;
+  std::shared_future<
+      rclcpp_action::ClientGoalHandle<ComputePathAction>::SharedPtr>
+      compute_path_future_goal_handle_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
       pose_subscription_;
@@ -621,7 +644,7 @@ private:
     cheapTSP(positions);
 
     // simpleBoustrophedonOrdering();
-    backAndForthOrdering();
+    // backAndForthOrdering();
 
     // executeStarPatternCoverageViaWaypoints();
     // executeCoverage();
@@ -685,39 +708,43 @@ private:
         *(costmap.getMutex()));
 
     auto char_map = costmap.getCharMap();
+    unsigned int pos_idx = costmap.getIndex(mx, my);
 
-    std::vector<bool> frontier_flag(
-        costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
+    std::queue<unsigned int> bfs;
     std::vector<bool> visited_flag(
         costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
 
-    unsigned char cost = costmap.getCost(mx, my);
-    unsigned int pos_idx = costmap.getIndex(mx, my);
-
-    RCLCPP_INFO(get_logger(), "start cost: %u", cost);
-
     unsigned int start;
-    std::stack<unsigned int> dfs;
 
-    if (cost > upper_cost_bound_ || cost < lower_cost_bound_) {
-      if (nearestCell(start, pos_idx, lower_cost_bound_, upper_cost_bound_,
-                      costmap)) {
-        RCLCPP_INFO(get_logger(), "new cost: %u", cost);
-        dfs.push(start);
-      } else {
-        RCLCPP_ERROR(
-            get_logger(),
-            "Could not find nearby clear cell to start costmap sampling");
-        return false;
+    bfs.push(pos_idx);
+    visited_flag[pos_idx] = true;
+
+    while (!bfs.empty()) {
+      unsigned int idx = bfs.front();
+      bfs.pop();
+
+      std::vector<unsigned int> nhood = nhood4(idx, costmap);
+
+      if (char_map[idx] == 0 && char_map[nhood[0]] > 0 ||
+          char_map[idx] == 0 && char_map[nhood[1]] > 0 ||
+          char_map[idx] == 0 && char_map[nhood[2]] > 0 ||
+          char_map[idx] == 0 && char_map[nhood[3]] > 0) {
+        start = idx;
+        break;
       }
-    } else {
-      dfs.push(pos_idx);
+
+      for (unsigned nbr : nhood8(idx, costmap)) {
+        if (!visited_flag[nbr]) {
+          bfs.push(nbr);
+          visited_flag[nbr] = true;
+        }
+      }
     }
 
     geometry_msgs::msg::Point pos;
-    costmap.indexToCells(pos_idx, mx, my);
-    costmap.mapToWorld(mx, my, pos.x, pos.y);
 
+    std::stack<unsigned int> dfs;
+    dfs.push(start);
     visited_flag[dfs.top()] = true;
 
     while (!dfs.empty()) {
@@ -725,8 +752,12 @@ private:
       unsigned int idx = dfs.top();
       dfs.pop();
 
-      if (char_map[idx] <= upper_cost_bound_ &&
-          char_map[idx] >= lower_cost_bound_) {
+      std::vector<unsigned int> nhood = nhood4(idx, costmap);
+
+      if (char_map[idx] == 0 && char_map[nhood[0]] > 0 ||
+          char_map[idx] == 0 && char_map[nhood[1]] > 0 ||
+          char_map[idx] == 0 && char_map[nhood[2]] > 0 ||
+          char_map[idx] == 0 && char_map[nhood[3]] > 0) {
         costmap.indexToCells(idx, mx, my);
         costmap.mapToWorld(mx, my, pos.x, pos.y);
         positions.push_back(pos);
@@ -734,7 +765,7 @@ private:
 
       for (unsigned nbr : nhood8(idx, costmap)) {
 
-        if (!visited_flag[nbr] && char_map[nbr] <= upper_cost_bound_) {
+        if (!visited_flag[nbr] && char_map[nbr] <= 20) {
           visited_flag[nbr] = true;
           dfs.push(nbr);
         }
@@ -907,7 +938,6 @@ private:
       geometry_msgs::msg::Quaternion q_msg;
       tf2::fromMsg(q_msg, q);
 
-
       geometry_msgs::msg::PoseStamped waypoint_pose;
       waypoint_pose.pose.position = coverage_positions_sorted_[i];
       waypoint_pose.pose.orientation = q_msg;
@@ -951,20 +981,14 @@ private:
     RCLCPP_INFO(get_logger(), "published poses number: %ld",
                 marker_array_.markers.size());
 
-    rclcpp_action::Client<nav2_msgs::action::ComputePathThroughPoses>::SharedPtr
-        compute_through_poses_client = rclcpp_action::create_client<
-            nav2_msgs::action::ComputePathThroughPoses>(
-            this, "/compute_path_through_poses");
-
-    compute_through_poses_client->wait_for_action_server();
-
-    auto goal = nav2_msgs::action::ComputePathThroughPoses::Goal();
+    auto goal = ComputePathAction::Goal();
 
     goal.goals = goal_poses;
     goal.use_start = false;
     goal.planner_id = "GridBased";
 
-    auto send_goal_options = rclcpp_action::Client<nav2_msgs::action::ComputePathThroughPoses>::SendGoalOptions();
+    auto send_goal_options =
+        rclcpp_action::Client<ComputePathAction>::SendGoalOptions();
 
     send_goal_options.goal_response_callback = [this](const auto &goal_handle) {
       if (goal_handle) {
@@ -975,18 +999,60 @@ private:
     };
 
     send_goal_options.result_callback = [this](const auto &result) {
-      
       RCLCPP_INFO(get_logger(), "[RESULT] number of poses: %lu",
                   result.result->path.poses.size());
+      followCoveragePath(result.result->path);
     };
 
     RCLCPP_INFO(get_logger(), "[REQUEST] Computing path through goals..");
 
-    std::shared_future<rclcpp_action::ClientGoalHandle<
-        nav2_msgs::action::ComputePathThroughPoses>::SharedPtr>
-        compute_through_poses_client_future_goal_handle_ =
-            compute_through_poses_client->async_send_goal(goal,
-                                                          send_goal_options);
+    compute_path_future_goal_handle_ =
+        path_computer_->async_send_goal(goal, send_goal_options);
+  }
+
+  void followCoveragePath(nav_msgs::msg::Path &coverage_path) {
+
+    auto goal = nav2_msgs::action::FollowPath::Goal();
+
+    goal.path = coverage_path;
+    goal.controller_id = "FollowPath";
+    goal.goal_checker_id = "general_goal_checker";
+    // goal.progress_checker_id = "progress_checker";
+
+    auto send_goal_options =
+        rclcpp_action::Client<FollowPathAction>::SendGoalOptions();
+
+    send_goal_options.goal_response_callback = [this](const auto &goal_handle) {
+      if (goal_handle) {
+        RCLCPP_INFO(get_logger(),
+                    "[FollowPath RESPONSE] Goal accepted by server.");
+      } else {
+        RCLCPP_ERROR(get_logger(),
+                     "[FollowPath RESPONSE] Goal was rejected by server.");
+      }
+    };
+
+    send_goal_options.result_callback = [this](const auto &result) {
+      switch (result.code) {
+      case rclcpp_action::ResultCode::SUCCEEDED:
+        RCLCPP_INFO(get_logger(), "[FollowPath RESULT]: SUCCEEDED");
+        break;
+      case rclcpp_action::ResultCode::ABORTED:
+        RCLCPP_INFO(get_logger(), "[FollowPath RESULT]: ABORTED");
+        break;
+      case rclcpp_action::ResultCode::CANCELED:
+        RCLCPP_INFO(get_logger(), "[FollowPath RESULT]: CANCELED");
+        break;
+      default:
+        RCLCPP_INFO(get_logger(), "[FollowPath RESULT]: unkown");
+        break;
+      }
+    };
+
+    RCLCPP_INFO(get_logger(), "[REQUEST] Follow path request..");
+
+    follow_path_future_goal_handle_ =
+        path_follower_->async_send_goal(goal, send_goal_options);
   }
 
   void executeCoverage() {
