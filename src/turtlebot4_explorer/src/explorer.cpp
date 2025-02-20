@@ -3,8 +3,8 @@
 #include <stack>
 #include <vector>
 
-#include "geometry_msgs/msg/pose_with_covariance_stamped.hpp"
-#include "nav2_costmap_2d/costmap_2d.hpp"
+#include "turtlebot4_explorer/util.hpp"
+
 #include "nav2_msgs/action/compute_path_through_poses.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/follow_waypoints.hpp"
@@ -17,14 +17,8 @@
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "slam_toolbox/srv/serialize_pose_graph.hpp"
-#include "tf2_ros/buffer.h"
-#include "turtlebot4_explorer/util.hpp"
 #include "visualization_msgs/msg/marker_array.hpp"
 #include <slam_toolbox/srv/detail/save_map__struct.hpp>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-#include <tf2_ros/transform_listener.h>
-
-#include "turtlebot4_explorer/util.hpp"
 
 using namespace std::chrono_literals;
 
@@ -32,10 +26,9 @@ using NavAction = nav2_msgs::action::NavigateToPose;
 using NavClient = rclcpp_action::Client<NavAction>;
 using WaypointAction = nav2_msgs::action::FollowWaypoints;
 using WaypointClient = rclcpp_action::Client<WaypointAction>;
-using ComputePathAction = nav2_msgs::action::ComputePathThroughPoses;
-using ComputePathClient = rclcpp_action::Client<ComputePathAction>;
-using FollowPathAction = nav2_msgs::action::FollowPath;
-using FollowPathClient = rclcpp_action::Client<FollowPathAction>;
+using PoseCovStamped = geometry_msgs::msg::PoseWithCovarianceStamped;
+using PoseStamped = geometry_msgs::msg::PoseStamped;
+using Point = geometry_msgs::msg::Point;
 
 class Explorer : public rclcpp::Node {
 public:
@@ -85,17 +78,9 @@ public:
     waypoint_navigator_ =
         rclcpp_action::create_client<WaypointAction>(this, "/follow_waypoints");
 
-    path_follower_ =
-        rclcpp_action::create_client<nav2_msgs::action::FollowPath>(
-            this, "/follow_path");
-
-    path_computer_ = rclcpp_action::create_client<ComputePathAction>(
-        this, "/compute_path_through_poses");
-
-    pose_subscription_ =
-        create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-            pose_topic_, 10,
-            std::bind(&Explorer::poseCallback, this, std::placeholders::_1));
+    pose_subscription_ = create_subscription<PoseCovStamped>(
+        pose_topic_, 10,
+        std::bind(&Explorer::poseCallback, this, std::placeholders::_1));
 
     map_subscription_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
         "/map", 10,
@@ -107,8 +92,7 @@ public:
 
     cost_translation_table_ = initTranslationTable();
 
-    start_pose_ =
-        std::make_unique<geometry_msgs::msg::PoseWithCovarianceStamped>();
+    start_pose_ = std::make_unique<PoseCovStamped>();
 
     callback_group_ =
         create_callback_group(rclcpp::CallbackGroupType::Reentrant);
@@ -132,8 +116,6 @@ public:
     RCLCPP_INFO(get_logger(), "Waiting for nav2 stack..");
     pose_navigator_->wait_for_action_server();
     waypoint_navigator_->wait_for_action_server();
-    path_follower_->wait_for_action_server();
-    path_computer_->wait_for_action_server();
 
     RCLCPP_INFO(get_logger(), "Remembering start pose at (%f, %f), ",
                 current_pose_->pose.pose.position.x,
@@ -155,22 +137,13 @@ private:
 
   NavClient::SharedPtr pose_navigator_;
   WaypointClient::SharedPtr waypoint_navigator_;
-  FollowPathClient::SharedPtr path_follower_;
-  ComputePathClient::SharedPtr path_computer_;
 
   std::shared_future<rclcpp_action::ClientGoalHandle<NavAction>::SharedPtr>
       nav_action_future_goal_handle_;
   std::shared_future<rclcpp_action::ClientGoalHandle<WaypointAction>::SharedPtr>
       waypoint_future_goal_handle_;
-  std::shared_future<
-      rclcpp_action::ClientGoalHandle<FollowPathAction>::SharedPtr>
-      follow_path_future_goal_handle_;
-  std::shared_future<
-      rclcpp_action::ClientGoalHandle<ComputePathAction>::SharedPtr>
-      compute_path_future_goal_handle_;
 
-  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
-      pose_subscription_;
+  rclcpp::Subscription<PoseCovStamped>::SharedPtr pose_subscription_;
 
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr
       map_subscription_;
@@ -193,15 +166,16 @@ private:
   unsigned int upper_cost_bound_;
   unsigned int lower_cost_bound_;
 
-  int current_coverage_pose_nr_ = 0;
+  unsigned long current_coverage_pose_nr_ = 0;
   double coverage_step_size_w_; // min step size in world scale to execute
-                                // coverage pattern
-  std::vector<geometry_msgs::msg::Point> coverage_positions_sorted_;
-  std::vector<double> coverage_orientations_deg_;
-  std::vector<geometry_msgs::msg::PoseStamped> waypoint_poses_;
+  // coverage pattern
+  std::vector<PoseStamped> coverage_poses_;
 
-  geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr current_pose_;
-  geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr start_pose_;
+  std::vector<double> coverage_orientations_deg_;
+  std::vector<PoseStamped> waypoint_poses_;
+
+  PoseCovStamped::UniquePtr current_pose_;
+  PoseCovStamped::UniquePtr start_pose_;
 
   std::array<unsigned char, 256> cost_translation_table_;
 
@@ -224,6 +198,8 @@ private:
     goal.pose.pose.position = frontiers_[0].centroid;
     goal.pose.pose.orientation.w = 1.;
     goal.pose.header.frame_id = "map";
+    goal.behavior_tree =
+        "/home/mayerfel/ws/autonomous_acquisition/bt/explore.xml";
 
     auto send_goal_options = NavClient::SendGoalOptions();
     // send_goal_options.feedback_callback =
@@ -345,7 +321,7 @@ private:
 
   Frontier buildNewFrontier(unsigned int neighborCell,
                             std::vector<bool> &frontier_flag,
-                            geometry_msgs::msg::Point robot_position) {
+                            Point robot_position) {
 
     Frontier output;
 
@@ -356,7 +332,7 @@ private:
     costmap_.indexToCells(neighborCell, mx, my);
     costmap_.mapToWorld(mx, my, wx, wy);
 
-    geometry_msgs::msg::Point point;
+    Point point;
     point.x = wx;
     point.y = wy;
 
@@ -381,7 +357,7 @@ private:
           costmap_.indexToCells(nbr, mx, my);
           costmap_.mapToWorld(mx, my, wx, wy);
 
-          geometry_msgs::msg::Point point;
+          Point point;
           point.x = wx;
           point.y = wy;
 
@@ -400,9 +376,6 @@ private:
 
     double dx = robot_position.x - output.centroid.x;
     double dy = robot_position.y - output.centroid.y;
-
-    // double dx = currentGoal.centroid.x - output.centroid.x;
-    // double dy = currentGoal.centroid.y - output.centroid.y;
 
     output.distance = std::sqrt(dx * dx + dy * dy);
 
@@ -502,10 +475,44 @@ private:
     }
   }
 
-  void poseCallback(
-      geometry_msgs::msg::PoseWithCovarianceStamped::UniquePtr poseMsg) {
+  void poseCallback(PoseCovStamped::UniquePtr poseMsg) {
     // RCLCPP_INFO(get_logger(), "poseCallback..");
     current_pose_ = move(poseMsg);
+  }
+
+  void drawPoses(std::vector<PoseStamped> poses) {
+    unsigned max = poses.size();
+    for (unsigned int i = 0; i < max; i++) {
+
+      std_msgs::msg::ColorRGBA color;
+
+      color.r = ((double)max - (double)i) / (double)max;
+      color.g = 0.;
+      color.b = (double)i / (double)max;
+      color.a = 1.0;
+
+      std::vector<visualization_msgs::msg::Marker> &markers =
+          marker_array_.markers;
+      visualization_msgs::msg::Marker m;
+
+      m.header.frame_id = "map";
+      m.header.stamp = this->now();
+      m.frame_locked = true;
+
+      m.action = visualization_msgs::msg::Marker::ADD;
+      m.ns = "grid_pattern";
+      m.id = i;
+      m.type = visualization_msgs::msg::Marker::ARROW;
+      m.pose = poses[i].pose;
+      m.scale.x = 0.15;
+      m.scale.y = 0.05;
+      m.scale.z = 0.05;
+      m.color = color;
+      markers.push_back(m);
+    }
+    marker_array_publisher_->publish(marker_array_);
+    RCLCPP_INFO(get_logger(), "published poses number: %ld",
+                marker_array_.markers.size());
   }
 
   void drawMarkers(const std::vector<Frontier> &frontiers) {
@@ -633,8 +640,7 @@ private:
 
   void calculateCoverage() {
 
-    std::vector<geometry_msgs::msg::Point> positions;
-    coverage_positions_sorted_.clear();
+    std::vector<Point> positions;
 
     if (!costmapWalkSampling(positions)) {
       RCLCPP_ERROR(get_logger(), "Error calculating coverage poses!");
@@ -643,15 +649,19 @@ private:
 
     cheapTSP(positions);
 
-    // simpleBoustrophedonOrdering();
-    // backAndForthOrdering();
+    backAndForthOrdering(positions);
 
-    // executeStarPatternCoverageViaWaypoints();
-    // executeCoverage();
-    executeCoverageComputePathThroughPoses();
+    positionToPathPoses(positions);
+
+    drawPoses(coverage_poses_);
+
+    // executeStarPatternCoverageViaWaypoints(positions);
+    executeCoverage();
   }
 
-  bool costmapWalkSampling(std::vector<geometry_msgs::msg::Point> &positions) {
+  bool costmapWalkSampling(std::vector<Point> &positions) {
+
+    RCLCPP_INFO(get_logger(), "[costmapWalkSampling]");
 
     auto request = std::make_shared<nav2_msgs::srv::GetCostmap::Request>();
 
@@ -672,7 +682,7 @@ private:
 
     auto status = result.wait_for(5s); // 5s should be generous
     if (status != std::future_status::ready) {
-      RCLCPP_ERROR(get_logger(), "Houston weve had a problem!");
+      RCLCPP_ERROR(get_logger(), "Did not receive an answer after 5 seconds.");
       return false;
     }
 
@@ -683,17 +693,7 @@ private:
 
     map = result.get()->map;
 
-    const auto meta_data = map.metadata;
-    costmap.resizeMap(meta_data.size_x, meta_data.size_y, meta_data.resolution,
-                      meta_data.origin.position.x, meta_data.origin.position.y);
-
-    RCLCPP_INFO(get_logger(), "success!");
-
-    unsigned char *costmap_data = costmap.getCharMap();
-    size_t costmap_size = costmap.getSizeInCellsX() * costmap.getSizeInCellsY();
-    for (size_t i = 0; i < costmap_size && i < map.data.size(); ++i) {
-      costmap_data[i] = map.data[i];
-    }
+    costmapMsgTo2D(map, costmap);
 
     const auto position = current_pose_->pose.pose.position;
     unsigned int mx, my;
@@ -704,31 +704,21 @@ private:
       return false;
     }
 
-    std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(
-        *(costmap.getMutex()));
-
-    auto char_map = costmap.getCharMap();
-    unsigned int pos_idx = costmap.getIndex(mx, my);
-
     std::queue<unsigned int> bfs;
     std::vector<bool> visited_flag(
         costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
 
     unsigned int start;
-
+    unsigned int pos_idx = costmap.getIndex(mx, my);
     bfs.push(pos_idx);
     visited_flag[pos_idx] = true;
+    unsigned occupied_nbr;
 
     while (!bfs.empty()) {
       unsigned int idx = bfs.front();
       bfs.pop();
 
-      std::vector<unsigned int> nhood = nhood4(idx, costmap);
-
-      if (char_map[idx] == 0 && char_map[nhood[0]] > 0 ||
-          char_map[idx] == 0 && char_map[nhood[1]] > 0 ||
-          char_map[idx] == 0 && char_map[nhood[2]] > 0 ||
-          char_map[idx] == 0 && char_map[nhood[3]] > 0) {
+      if (isCostBorderCell(idx, occupied_nbr, costmap)) {
         start = idx;
         break;
       }
@@ -741,7 +731,9 @@ private:
       }
     }
 
-    geometry_msgs::msg::Point pos;
+    Point free_pos;
+    Point occupied_pos;
+    Point coverage_pos;
 
     std::stack<unsigned int> dfs;
     dfs.push(start);
@@ -752,33 +744,40 @@ private:
       unsigned int idx = dfs.top();
       dfs.pop();
 
-      std::vector<unsigned int> nhood = nhood4(idx, costmap);
-
-      if (char_map[idx] == 0 && char_map[nhood[0]] > 0 ||
-          char_map[idx] == 0 && char_map[nhood[1]] > 0 ||
-          char_map[idx] == 0 && char_map[nhood[2]] > 0 ||
-          char_map[idx] == 0 && char_map[nhood[3]] > 0) {
+      if (isCostBorderCell(idx, occupied_nbr, costmap)) {
         costmap.indexToCells(idx, mx, my);
-        costmap.mapToWorld(mx, my, pos.x, pos.y);
-        positions.push_back(pos);
+        costmap.mapToWorld(mx, my, free_pos.x, free_pos.y);
+
+        costmap.indexToCells(occupied_nbr, mx, my);
+        costmap.mapToWorld(mx, my, occupied_pos.x, occupied_pos.y);
+
+        coverage_pos.x = free_pos.x + (free_pos.x - occupied_pos.x) * 0.15 /
+                                          costmap.getResolution();
+        coverage_pos.y = free_pos.y + (free_pos.y - occupied_pos.y) * 0.15 /
+                                          costmap.getResolution();
+
+        positions.push_back(coverage_pos);
       }
 
       for (unsigned nbr : nhood8(idx, costmap)) {
 
-        if (!visited_flag[nbr] && char_map[nbr] <= 20) {
+        if (!visited_flag[nbr] && costmap.getCost(nbr) <= 100) {
           visited_flag[nbr] = true;
           dfs.push(nbr);
         }
       }
     }
+    RCLCPP_INFO(get_logger(), "[costmapWalkSampling]: found %lu positions",
+                positions.size());
+
     return true;
   }
 
-  void executeStarPatternCoverageViaWaypoints() {
+  void executeStarPatternCoverageViaWaypoints(std::vector<Point> &positions) {
 
-    for (const auto &p : coverage_positions_sorted_) {
+    for (const auto &p : positions) {
       for (const auto &o : coverage_orientations_deg_) {
-        geometry_msgs::msg::PoseStamped waypoint_pose;
+        PoseStamped waypoint_pose;
         waypoint_pose.pose.position = p;
         waypoint_pose.pose.orientation.z =
             std::sin((o / 360. * (2 * M_PI)) / 2);
@@ -789,39 +788,6 @@ private:
         waypoint_poses_.push_back(waypoint_pose);
       }
     }
-
-    int max = waypoint_poses_.size();
-    for (unsigned int i = 0; i < max; i++) {
-
-      std_msgs::msg::ColorRGBA color;
-
-      color.r = ((double)max - (double)i) / (double)max;
-      color.g = 0.;
-      color.b = (double)i / (double)max;
-      color.a = 1.0;
-
-      std::vector<visualization_msgs::msg::Marker> &markers =
-          marker_array_.markers;
-      visualization_msgs::msg::Marker m;
-
-      m.header.frame_id = "map";
-      m.header.stamp = this->now();
-      m.frame_locked = true;
-
-      m.action = visualization_msgs::msg::Marker::ADD;
-      m.ns = "grid_pattern";
-      m.id = i;
-      m.type = visualization_msgs::msg::Marker::ARROW;
-      m.pose = waypoint_poses_[i].pose;
-      m.scale.x = 0.15;
-      m.scale.y = 0.05;
-      m.scale.z = 0.05;
-      m.color = color;
-      markers.push_back(m);
-    }
-    marker_array_publisher_->publish(marker_array_);
-    RCLCPP_INFO(get_logger(), "published poses number: %ld",
-                marker_array_.markers.size());
 
     auto goal = WaypointAction::Goal();
     goal.poses = waypoint_poses_;
@@ -920,152 +886,18 @@ private:
         pose_navigator_->async_send_goal(goal, send_goal_options);
   }
 
-  void executeCoverageComputePathThroughPoses() {
-
-    RCLCPP_INFO(get_logger(), "[executeCoverageComputePathThroughPoses]");
-
-    std::vector<geometry_msgs::msg::PoseStamped> goal_poses;
-    for (int i = 0; i < coverage_positions_sorted_.size(); i++) {
-
-      double x =
-          coverage_positions_sorted_[i + 1].x - coverage_positions_sorted_[i].x;
-      double y =
-          coverage_positions_sorted_[i + 1].y - coverage_positions_sorted_[i].y;
-
-      double yaw = std::atan2(y, x);
-      tf2::Quaternion q;
-      q.setRPY(0, 0, yaw);
-      geometry_msgs::msg::Quaternion q_msg;
-      tf2::fromMsg(q_msg, q);
-
-      geometry_msgs::msg::PoseStamped waypoint_pose;
-      waypoint_pose.pose.position = coverage_positions_sorted_[i];
-      waypoint_pose.pose.orientation = q_msg;
-
-      waypoint_pose.header.frame_id = "map";
-
-      goal_poses.push_back(waypoint_pose);
-    }
-
-    int max = goal_poses.size();
-    for (unsigned int i = 0; i < max; i++) {
-
-      std_msgs::msg::ColorRGBA color;
-
-      color.r = ((double)max - (double)i) / (double)max;
-      color.g = 0.;
-      color.b = (double)i / (double)max;
-      color.a = 1.0;
-
-      std::vector<visualization_msgs::msg::Marker> &markers =
-          marker_array_.markers;
-      visualization_msgs::msg::Marker m;
-
-      m.header.frame_id = "map";
-      m.header.stamp = this->now();
-      m.frame_locked = true;
-
-      m.action = visualization_msgs::msg::Marker::ADD;
-      m.ns = "path";
-      m.id = i;
-      m.type = visualization_msgs::msg::Marker::ARROW;
-      m.pose = goal_poses[i].pose;
-      m.scale.x = 0.15;
-      m.scale.y = 0.05;
-      m.scale.z = 0.05;
-      m.color = color;
-      markers.push_back(m);
-    }
-
-    marker_array_publisher_->publish(marker_array_);
-    RCLCPP_INFO(get_logger(), "published poses number: %ld",
-                marker_array_.markers.size());
-
-    auto goal = ComputePathAction::Goal();
-
-    goal.goals = goal_poses;
-    goal.use_start = false;
-    goal.planner_id = "GridBased";
-
-    auto send_goal_options =
-        rclcpp_action::Client<ComputePathAction>::SendGoalOptions();
-
-    send_goal_options.goal_response_callback = [this](const auto &goal_handle) {
-      if (goal_handle) {
-        RCLCPP_INFO(get_logger(), "[RESPONSE] Goal accepted by server.");
-      } else {
-        RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
-      }
-    };
-
-    send_goal_options.result_callback = [this](const auto &result) {
-      RCLCPP_INFO(get_logger(), "[RESULT] number of poses: %lu",
-                  result.result->path.poses.size());
-      followCoveragePath(result.result->path);
-    };
-
-    RCLCPP_INFO(get_logger(), "[REQUEST] Computing path through goals..");
-
-    compute_path_future_goal_handle_ =
-        path_computer_->async_send_goal(goal, send_goal_options);
-  }
-
-  void followCoveragePath(nav_msgs::msg::Path &coverage_path) {
-
-    auto goal = nav2_msgs::action::FollowPath::Goal();
-
-    goal.path = coverage_path;
-    goal.controller_id = "FollowPath";
-    goal.goal_checker_id = "general_goal_checker";
-    // goal.progress_checker_id = "progress_checker";
-
-    auto send_goal_options =
-        rclcpp_action::Client<FollowPathAction>::SendGoalOptions();
-
-    send_goal_options.goal_response_callback = [this](const auto &goal_handle) {
-      if (goal_handle) {
-        RCLCPP_INFO(get_logger(),
-                    "[FollowPath RESPONSE] Goal accepted by server.");
-      } else {
-        RCLCPP_ERROR(get_logger(),
-                     "[FollowPath RESPONSE] Goal was rejected by server.");
-      }
-    };
-
-    send_goal_options.result_callback = [this](const auto &result) {
-      switch (result.code) {
-      case rclcpp_action::ResultCode::SUCCEEDED:
-        RCLCPP_INFO(get_logger(), "[FollowPath RESULT]: SUCCEEDED");
-        break;
-      case rclcpp_action::ResultCode::ABORTED:
-        RCLCPP_INFO(get_logger(), "[FollowPath RESULT]: ABORTED");
-        break;
-      case rclcpp_action::ResultCode::CANCELED:
-        RCLCPP_INFO(get_logger(), "[FollowPath RESULT]: CANCELED");
-        break;
-      default:
-        RCLCPP_INFO(get_logger(), "[FollowPath RESULT]: unkown");
-        break;
-      }
-    };
-
-    RCLCPP_INFO(get_logger(), "[REQUEST] Follow path request..");
-
-    follow_path_future_goal_handle_ =
-        path_follower_->async_send_goal(goal, send_goal_options);
-  }
-
   void executeCoverage() {
 
-    RCLCPP_INFO(get_logger(), "[executeCoverage]");
+    RCLCPP_INFO(get_logger(),
+                "[executeCoverage]: current_coverage_pose_nr_: %lu",
+                current_coverage_pose_nr_);
 
-    geometry_msgs::msg::Point next_goal =
-        coverage_positions_sorted_[current_coverage_pose_nr_];
+    PoseStamped next_goal = coverage_poses_[current_coverage_pose_nr_];
 
     auto goal = NavAction::Goal();
-    goal.pose.pose.position = next_goal;
-    goal.pose.pose.orientation.w = 1.;
-    goal.pose.header.frame_id = "map";
+    goal.pose = next_goal;
+    goal.behavior_tree =
+        "/home/mayerfel/ws/autonomous_acquisition/bt/coverage.xml";
 
     auto send_goal_options = NavClient::SendGoalOptions();
 
@@ -1075,14 +907,12 @@ private:
       } else {
         RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
         current_coverage_pose_nr_++;
-        if (current_coverage_pose_nr_ <
-                (int)coverage_positions_sorted_.size() &&
-            current_coverage_pose_nr_ >= 0) {
+        if (current_coverage_pose_nr_ < coverage_poses_.size()) {
           executeCoverage();
         } else {
           RCLCPP_INFO(get_logger(),
                       "[executeCoverage] Seems like coverage is completed! "
-                      "current_coverage_pose_nr_: %d",
+                      "current_coverage_pose_nr_: %lu",
                       current_coverage_pose_nr_);
         }
       }
@@ -1115,130 +945,56 @@ private:
         break;
       }
       current_coverage_pose_nr_++;
-      if (current_coverage_pose_nr_ < (int)coverage_positions_sorted_.size() &&
-          current_coverage_pose_nr_ >= 0) {
+      if (current_coverage_pose_nr_ < coverage_poses_.size()) {
         executeCoverage();
       } else {
         RCLCPP_INFO(get_logger(),
                     "[executeCoverage] Seems like coverage is completed! "
-                    "current_coverage_pose_nr_: %d",
+                    "current_coverage_pose_nr_: %lu",
                     current_coverage_pose_nr_);
         returnToStartPose();
       }
     };
 
-    RCLCPP_INFO(get_logger(), "[REQUEST] Sending goal %f,%f", next_goal.x,
-                next_goal.y);
+    RCLCPP_INFO(get_logger(), "[REQUEST] Sending goal %f,%f",
+                next_goal.pose.position.x, next_goal.pose.position.y);
     nav_action_future_goal_handle_ =
         pose_navigator_->async_send_goal(goal, send_goal_options);
   }
 
-  void backAndForthOrdering() {
+  void backAndForthOrdering(std::vector<Point> &positions) {
 
     RCLCPP_INFO(get_logger(), "[backAndForthOrdering]");
 
-    std::vector<geometry_msgs::msg::Point> back_and_forth;
-    unsigned int n = coverage_positions_sorted_.size();
+    std::vector<Point> back_and_forth;
+    unsigned int n = positions.size();
 
     for (unsigned i = 0; i < n; i++) {
-      back_and_forth.push_back(coverage_positions_sorted_[i]);
+      back_and_forth.push_back(positions[i]);
     }
     for (unsigned i = n - 1; i > 0; i--) {
-      back_and_forth.push_back(coverage_positions_sorted_[i]);
+      back_and_forth.push_back(positions[i]);
     }
 
-    coverage_positions_sorted_ = back_and_forth;
-
-    int max = coverage_positions_sorted_.size();
-    for (unsigned int i = 0; i < max; i++) {
-
-      std_msgs::msg::ColorRGBA color;
-
-      color.r = ((double)max - (double)i) / (double)max;
-      color.g = 0.;
-      color.b = (double)i / (double)max;
-      color.a = 1.0;
-
-      std::vector<visualization_msgs::msg::Marker> &markers =
-          marker_array_.markers;
-      visualization_msgs::msg::Marker m;
-
-      m.header.frame_id = "map";
-      m.header.stamp = this->now();
-      m.frame_locked = true;
-
-      m.action = visualization_msgs::msg::Marker::ADD;
-      m.ns = "grid_pattern";
-      m.id = i;
-      m.type = visualization_msgs::msg::Marker::ARROW;
-      m.pose.position = coverage_positions_sorted_[i];
-      m.scale.x = 0.15;
-      m.scale.y = 0.05;
-      m.scale.z = 0.05;
-      m.color = color;
-      markers.push_back(m);
-    }
-    marker_array_publisher_->publish(marker_array_);
-    RCLCPP_INFO(get_logger(), "published poses number: %ld",
-                marker_array_.markers.size());
+    positions = back_and_forth;
   }
 
-  void simpleBoustrophedonOrdering() {
-
-    std::vector<geometry_msgs::msg::Point> boustrophedon_coverage_points;
-    unsigned int n = coverage_positions_sorted_.size();
-
-    for (unsigned i = 0; i < n / 2; i++) {
-      boustrophedon_coverage_points.push_back(coverage_positions_sorted_[i]);
-      boustrophedon_coverage_points.push_back(
-          coverage_positions_sorted_[n - i]);
-    }
-    coverage_positions_sorted_ = boustrophedon_coverage_points;
-
-    int max = coverage_positions_sorted_.size();
-    for (unsigned int i = 0; i < max; i++) {
-
-      std_msgs::msg::ColorRGBA color;
-
-      color.r = ((double)max - (double)i) / (double)max;
-      color.g = 0.;
-      color.b = (double)i / (double)max;
-      color.a = 1.0;
-
-      std::vector<visualization_msgs::msg::Marker> &markers =
-          marker_array_.markers;
-      visualization_msgs::msg::Marker m;
-
-      m.header.frame_id = "map";
-      m.header.stamp = this->now();
-      m.frame_locked = true;
-
-      m.action = visualization_msgs::msg::Marker::ADD;
-      m.ns = "grid_pattern";
-      m.id = i;
-      m.type = visualization_msgs::msg::Marker::ARROW;
-      m.pose.position = coverage_positions_sorted_[i];
-      m.scale.x = 0.15;
-      m.scale.y = 0.05;
-      m.scale.z = 0.05;
-      m.color = color;
-      markers.push_back(m);
-    }
-    marker_array_publisher_->publish(marker_array_);
-    RCLCPP_INFO(get_logger(), "published poses number: %ld",
-                marker_array_.markers.size());
-  }
-
-  void cheapTSP(std::vector<geometry_msgs::msg::Point> &positions) {
+  void cheapTSP(std::vector<Point> &positions) {
 
     RCLCPP_INFO(get_logger(), "[cheapTSP]");
 
-    geometry_msgs::msg::Point current_pos = current_pose_->pose.pose.position;
+    if (positions.size() == 0) {
+      RCLCPP_ERROR(get_logger(), "[cheapTSP] positions empty");
+      return;
+    }
+
+    Point current_pos = current_pose_->pose.pose.position;
 
     int best_next_idx = 0;
     double best_dist = 10e10f;
 
     int todo = positions.size();
+    std::vector<Point> positions_sorted(todo);
     std::vector<bool> planned(todo, false);
     int done = 0;
 
@@ -1255,16 +1011,67 @@ private:
           }
         }
       }
-
-      if (best_dist >= coverage_step_size_w_) {
-        coverage_positions_sorted_.push_back(positions[best_next_idx]);
-        current_pos = positions[best_next_idx];
-      }
+      current_pos = positions[best_next_idx];
+      positions_sorted.push_back(positions[best_next_idx]);
 
       done++;
       planned[best_next_idx] = true;
       best_dist = 10e10f;
     }
+
+    std::vector<Point> positions_sampled;
+
+    current_pos = positions_sorted[0];
+    positions_sampled.push_back(current_pos);
+
+    for (unsigned i = 1; i < positions_sorted.size(); i++) {
+      double tmp_dist =
+          std::sqrt(std::pow(current_pos.x - positions_sorted[i].x, 2) +
+                    std::pow(current_pos.y - positions_sorted[i].y, 2));
+      if (tmp_dist > coverage_step_size_w_) {
+        positions_sampled.push_back(positions_sorted[i]);
+        current_pos = positions_sorted[i];
+      }
+    }
+
+    positions = positions_sampled;
+
+    RCLCPP_INFO(get_logger(),
+                "[cheapTSP]: using %lu of %lu positions for coverage",
+                positions_sampled.size(), positions_sorted.size());
+  }
+
+  void positionToPathPoses(std::vector<Point> &positions) {
+
+    RCLCPP_INFO(get_logger(), "[positionToPathPoses]");
+
+    PoseStamped waypoint_pose;
+    unsigned i;
+
+    for (i = 0; i < positions.size() - 1; i++) {
+
+      double x = positions[i + 1].x - positions[i].x;
+      double y = positions[i + 1].y - positions[i].y;
+      double yaw = std::atan2(y, x);
+
+      RCLCPP_INFO(get_logger(), "[positionToPathPoses] yaw: %f", yaw);
+
+      geometry_msgs::msg::Quaternion q_msg;
+      tf2::Quaternion q;
+      q.setRPY(0, 0, yaw);
+      q_msg = tf2::toMsg(q);
+
+      waypoint_pose.pose.position = positions[i];
+      waypoint_pose.pose.orientation = q_msg;
+      waypoint_pose.header.frame_id = "map";
+      coverage_poses_.push_back(waypoint_pose);
+    }
+
+    waypoint_pose.pose.position = positions[++i];
+    waypoint_pose.pose.orientation.w = 1;
+    waypoint_pose.header.frame_id = "map";
+
+    coverage_poses_.push_back(waypoint_pose);
   }
 };
 
