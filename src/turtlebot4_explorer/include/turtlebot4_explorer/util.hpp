@@ -111,8 +111,17 @@ bool isCostBorderCell(unsigned int idx, unsigned int &nbr,
                       const nav2_costmap_2d::Costmap2D &costmap) {
 
   if (costmap.getCost(idx) == 0) {
-    for (unsigned nbr_idx : nhood8(idx, costmap)) {
+    for (unsigned nbr_idx : nhood4(idx, costmap)) {
         if (costmap.getCost(nbr_idx) > 0) {
+            nbr = nbr_idx;
+            return true;
+        }
+    }
+  }
+
+  if (costmap.getCost(idx) > 0) {
+    for (unsigned nbr_idx : nhood4(idx, costmap)) {
+        if (costmap.getCost(nbr_idx) == 0) {
             nbr = nbr_idx;
             return true;
         }

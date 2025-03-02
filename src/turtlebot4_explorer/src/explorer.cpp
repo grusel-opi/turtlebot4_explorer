@@ -480,7 +480,48 @@ private:
     current_pose_ = move(poseMsg);
   }
 
+  void drawPositions(std::vector<Point> positions) {
+
+    clearMarkers();
+
+    unsigned max = positions.size();
+    for (unsigned int i = 0; i < max; i++) {
+
+      std_msgs::msg::ColorRGBA color;
+
+      color.r = ((double)max - (double)i) / (double)max;
+      color.g = 0.;
+      color.b = (double)i / (double)max;
+      color.a = 1.0;
+
+      std::vector<visualization_msgs::msg::Marker> &markers =
+          marker_array_.markers;
+      visualization_msgs::msg::Marker m;
+
+      m.header.frame_id = "map";
+      m.header.stamp = this->now();
+      m.frame_locked = true;
+
+      m.action = visualization_msgs::msg::Marker::ADD;
+      m.ns = "grid_pattern";
+      m.id = i;
+      m.type = visualization_msgs::msg::Marker::SPHERE;
+      m.pose.position = positions[i];
+      m.scale.x = 0.1;
+      m.scale.y = 0.1;
+      m.scale.z = 0.1;
+      m.color = color;
+      markers.push_back(m);
+    }
+    marker_array_publisher_->publish(marker_array_);
+    RCLCPP_INFO(get_logger(), "published poses number: %ld",
+                marker_array_.markers.size());
+  }
+
   void drawPoses(std::vector<PoseStamped> poses) {
+
+    clearMarkers();
+
     unsigned max = poses.size();
     for (unsigned int i = 0; i < max; i++) {
 
@@ -648,8 +689,11 @@ private:
     }
 
     cheapTSP(positions);
+    worldspacePoseSampling(positions);
 
-    backAndForthOrdering(positions);
+    // drawPositions(positions);
+
+    // backAndForthOrdering(positions);
 
     positionToPathPoses(positions);
 
@@ -751,9 +795,9 @@ private:
         costmap.indexToCells(occupied_nbr, mx, my);
         costmap.mapToWorld(mx, my, occupied_pos.x, occupied_pos.y);
 
-        coverage_pos.x = free_pos.x + (free_pos.x - occupied_pos.x) * 0.15 /
+        coverage_pos.x = free_pos.x + (occupied_pos.x - free_pos.x) * 0.4 /
                                           costmap.getResolution();
-        coverage_pos.y = free_pos.y + (free_pos.y - occupied_pos.y) * 0.15 /
+        coverage_pos.y = free_pos.y + (occupied_pos.y - free_pos.y) * 0.4 /
                                           costmap.getResolution();
 
         positions.push_back(coverage_pos);
@@ -761,7 +805,7 @@ private:
 
       for (unsigned nbr : nhood8(idx, costmap)) {
 
-        if (!visited_flag[nbr] && costmap.getCost(nbr) <= 100) {
+        if (!visited_flag[nbr] && costmap.getCost(nbr) < 80 && costmap.getCost(nbr) > 0 /*isCostBorderCell(nbr, occupied_nbr, costmap)*/) {
           visited_flag[nbr] = true;
           dfs.push(nbr);
         }
@@ -1018,27 +1062,29 @@ private:
       planned[best_next_idx] = true;
       best_dist = 10e10f;
     }
+  }
 
+  void worldspacePoseSampling(std::vector<Point> &positions) {
     std::vector<Point> positions_sampled;
 
-    current_pos = positions_sorted[0];
+    Point current_pos = positions[0];
     positions_sampled.push_back(current_pos);
 
-    for (unsigned i = 1; i < positions_sorted.size(); i++) {
-      double tmp_dist =
-          std::sqrt(std::pow(current_pos.x - positions_sorted[i].x, 2) +
-                    std::pow(current_pos.y - positions_sorted[i].y, 2));
+    for (unsigned i = 1; i < positions.size(); i++) {
+      double tmp_dist = std::sqrt(std::pow(current_pos.x - positions[i].x, 2) +
+                                  std::pow(current_pos.y - positions[i].y, 2));
       if (tmp_dist > coverage_step_size_w_) {
-        positions_sampled.push_back(positions_sorted[i]);
-        current_pos = positions_sorted[i];
+        positions_sampled.push_back(positions[i]);
+        current_pos = positions[i];
       }
     }
 
     positions = positions_sampled;
 
-    RCLCPP_INFO(get_logger(),
-                "[cheapTSP]: using %lu of %lu positions for coverage",
-                positions_sampled.size(), positions_sorted.size());
+    RCLCPP_INFO(
+        get_logger(),
+        "[worldspacePoseSampling]: using %lu of %lu positions for coverage",
+        positions_sampled.size(), positions.size());
   }
 
   void positionToPathPoses(std::vector<Point> &positions) {
@@ -1054,7 +1100,7 @@ private:
       double y = positions[i + 1].y - positions[i].y;
       double yaw = std::atan2(y, x);
 
-      RCLCPP_INFO(get_logger(), "[positionToPathPoses] yaw: %f", yaw);
+      // RCLCPP_INFO(get_logger(), "[positionToPathPoses] yaw: %f", yaw);
 
       geometry_msgs::msg::Quaternion q_msg;
       tf2::Quaternion q;
