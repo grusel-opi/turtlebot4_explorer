@@ -119,15 +119,6 @@ bool isCostBorderCell(unsigned int idx, unsigned int &nbr,
     }
   }
 
-  if (costmap.getCost(idx) > 0) {
-    for (unsigned nbr_idx : nhood4(idx, costmap)) {
-        if (costmap.getCost(nbr_idx) == 0) {
-            nbr = nbr_idx;
-            return true;
-        }
-    }
-  }
-
   return false;
 }
 

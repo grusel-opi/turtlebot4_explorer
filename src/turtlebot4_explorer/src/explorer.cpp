@@ -38,35 +38,36 @@ public:
     declare_parameter("map_path", rclcpp::ParameterValue(std::string("~")));
     declare_parameter("min_size", rclcpp::ParameterValue(5));
     declare_parameter("min_dist", rclcpp::ParameterValue(1.0));
-    declare_parameter("map_given", rclcpp::ParameterValue(false));
-    declare_parameter("lower_cost_bound", rclcpp::ParameterValue(0));
-    declare_parameter("upper_cost_bound", rclcpp::ParameterValue(200));
     declare_parameter("coverage_pose_distance", rclcpp::ParameterValue(0.5));
     declare_parameter("coverage_orientations",
                       rclcpp::ParameterValue(std::vector<double>{
                           0., 45., 90., 135., 180., 225., 270., 315.}));
+    declare_parameter("use_amcl", rclcpp::ParameterValue(true));
+    declare_parameter("do_exploration", rclcpp::ParameterValue(false));
+    declare_parameter("freespace_star_poses", rclcpp::ParameterValue(false));
 
     get_parameter("map_path", map_path_);
     get_parameter("min_size", min_size_);
     get_parameter("min_dist", min_dist_);
-    get_parameter("map_given", map_given_);
-    get_parameter("lower_cost_bound", lower_cost_bound_);
-    get_parameter("upper_cost_bound", upper_cost_bound_);
     get_parameter("coverage_pose_distance", coverage_step_size_w_);
     get_parameter("coverage_orientations", coverage_orientations_deg_);
+    get_parameter("use_amcl", use_amcl_);
+    get_parameter("do_exploration", do_exploration_);
+    get_parameter("freespace_star_poses", freespace_star_poses_);
 
     RCLCPP_INFO(get_logger(), "map_path: %s", map_path_.c_str());
     RCLCPP_INFO(get_logger(), "min_size: %d", min_size_);
     RCLCPP_INFO(get_logger(), "min_dist: %f", min_dist_);
-    RCLCPP_INFO(get_logger(), "map_given: %d", map_given_);
-    RCLCPP_INFO(get_logger(), "lower_cost_bound: %d", lower_cost_bound_);
-    RCLCPP_INFO(get_logger(), "upper_cost_bound: %d", upper_cost_bound_);
     RCLCPP_INFO(get_logger(), "coverage_pose_distance: %f",
                 coverage_step_size_w_);
     RCLCPP_INFO(get_logger(), "number of orientations per coverage pose: %ld",
                 coverage_orientations_deg_.size());
+    RCLCPP_INFO(get_logger(), "use_amcl: %d", use_amcl_);
+    RCLCPP_INFO(get_logger(), "do_exploration: %d", do_exploration_);
+    RCLCPP_INFO(get_logger(), "freespace_star_poses: %d",
+                freespace_star_poses_);
 
-    if (map_given_) {
+    if (use_amcl_) {
       pose_topic_ = "/amcl_pose";
     } else {
       pose_topic_ = "/pose";
@@ -123,12 +124,12 @@ public:
     start_pose_->pose.pose.position = current_pose_->pose.pose.position;
     start_pose_->pose.pose.orientation = current_pose_->pose.pose.orientation;
 
-    if (map_given_) {
-      RCLCPP_INFO(get_logger(), "Starting with coverage.");
-      calculateCoverage();
-    } else {
+    if (do_exploration_) {
       RCLCPP_INFO(get_logger(), "Starting with exploration.");
       explore();
+    } else {
+      RCLCPP_INFO(get_logger(), "Starting with coverage.");
+      calculateCoverage();
     }
   }
 
@@ -158,13 +159,14 @@ private:
       marker_array_publisher_;
   visualization_msgs::msg::MarkerArray marker_array_;
 
-  bool map_given_;
+  bool use_amcl_;
+  bool do_exploration_;
+  bool freespace_star_poses_;
+
   std::string map_path_;
   std::string pose_topic_;
   double min_dist_;
   unsigned int min_size_;
-  unsigned int upper_cost_bound_;
-  unsigned int lower_cost_bound_;
 
   unsigned long current_coverage_pose_nr_ = 0;
   double coverage_step_size_w_; // min step size in world scale to execute
@@ -689,19 +691,17 @@ private:
     }
 
     cheapTSP(positions);
-    
+
     worldspacePoseSampling(positions);
 
-    // drawPositions(positions);
-
-    // backAndForthOrdering(positions);
-
-    positionToPathPoses(positions);
-
-    drawPoses(coverage_poses_);
-
-    // executeStarPatternCoverageViaWaypoints(positions);
-    executeCoverage();
+    if (freespace_star_poses_) {
+      //executeStarPatternCoverageViaWaypoints(positions);
+    } else {
+      backAndForthOrdering(positions);
+      positionToPathPoses(positions);
+      drawPoses(coverage_poses_);
+      executeCoverage();
+    }
   }
 
   bool costmapWalkSampling(std::vector<Point> &positions) {
@@ -749,39 +749,18 @@ private:
       return false;
     }
 
-    std::queue<unsigned int> bfs;
-    std::vector<bool> visited_flag(
-        costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
-
-    unsigned int start;
-    unsigned int pos_idx = costmap.getIndex(mx, my);
-    bfs.push(pos_idx);
-    visited_flag[pos_idx] = true;
     unsigned occupied_nbr;
-
-    while (!bfs.empty()) {
-      unsigned int idx = bfs.front();
-      bfs.pop();
-
-      if (isCostBorderCell(idx, occupied_nbr, costmap)) {
-        start = idx;
-        break;
-      }
-
-      for (unsigned nbr : nhood8(idx, costmap)) {
-        if (!visited_flag[nbr]) {
-          bfs.push(nbr);
-          visited_flag[nbr] = true;
-        }
-      }
-    }
-
     Point free_pos;
     Point occupied_pos;
     Point coverage_pos;
 
     std::stack<unsigned int> dfs;
-    dfs.push(start);
+    std::vector<bool> visited_flag(
+        costmap.getSizeInCellsX() * costmap.getSizeInCellsY(), false);
+
+    unsigned int pos_idx = costmap.getIndex(mx, my);
+
+    dfs.push(pos_idx);
     visited_flag[dfs.top()] = true;
 
     while (!dfs.empty()) {
@@ -789,24 +768,30 @@ private:
       unsigned int idx = dfs.top();
       dfs.pop();
 
-      if (isCostBorderCell(idx, occupied_nbr, costmap)) {
+      if (freespace_star_poses_) {
+
+        costmap.indexToCells(idx, mx, my);
+        costmap.mapToWorld(mx, my, free_pos.x, free_pos.y);
+        positions.push_back(free_pos);
+
+      } else if (isCostBorderCell(idx, occupied_nbr, costmap)) {
+
         costmap.indexToCells(idx, mx, my);
         costmap.mapToWorld(mx, my, free_pos.x, free_pos.y);
 
-        costmap.indexToCells(occupied_nbr, mx, my);
-        costmap.mapToWorld(mx, my, occupied_pos.x, occupied_pos.y);
+        // costmap.indexToCells(occupied_nbr, mx, my);
+        // costmap.mapToWorld(mx, my, occupied_pos.x, occupied_pos.y);
+        // coverage_pos.x = free_pos.x + (occupied_pos.x - free_pos.x) * -0.2 /
+        //                                   costmap.getResolution();
+        // coverage_pos.y = free_pos.y + (occupied_pos.y - free_pos.y) * -0.2 /
+        //                                   costmap.getResolution();
 
-        coverage_pos.x = free_pos.x + (occupied_pos.x - free_pos.x) * 0.4 /
-                                          costmap.getResolution();
-        coverage_pos.y = free_pos.y + (occupied_pos.y - free_pos.y) * 0.4 /
-                                          costmap.getResolution();
-
-        positions.push_back(coverage_pos);
+        positions.push_back(free_pos);
       }
 
       for (unsigned nbr : nhood8(idx, costmap)) {
 
-        if (!visited_flag[nbr] && costmap.getCost(nbr) < 80 /* && costmap.getCost(nbr) > 0 && isCostBorderCell(nbr, occupied_nbr, costmap)*/) {
+        if (!visited_flag[nbr] && costmap.getCost(nbr) == 0) {
           visited_flag[nbr] = true;
           dfs.push(nbr);
         }
@@ -1039,7 +1024,7 @@ private:
     double best_dist = 10e10f;
 
     int todo = positions.size();
-    std::vector<Point> positions_sorted(todo);
+    std::vector<Point> positions_sorted;
     std::vector<bool> planned(todo, false);
     int done = 0;
 
@@ -1057,14 +1042,17 @@ private:
         }
       }
       current_pos = positions[best_next_idx];
-      positions_sorted.push_back(positions[best_next_idx]);
+      if (best_dist < 3.) { // dont jump through map
+        positions_sorted.push_back(positions[best_next_idx]);
+      }
 
       done++;
       planned[best_next_idx] = true;
       best_dist = 10e10f;
     }
-    
+
     positions = positions_sorted;
+
   }
 
   void worldspacePoseSampling(std::vector<Point> &positions) {
