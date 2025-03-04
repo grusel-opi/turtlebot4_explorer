@@ -217,6 +217,60 @@ private:
     current_goal_ = frontiers_[0];
   }
 
+  void navigationResponseCallback(
+      const rclcpp_action::ClientGoalHandle<NavAction>::SharedPtr
+          &goal_handle) {
+    if (goal_handle) {
+      RCLCPP_INFO(get_logger(), "[RESPONSE] Goal accepted by server.");
+    } else {
+      RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
+      explore();
+    }
+  }
+
+  void navigationFeedbackCallback(
+      const rclcpp_action::ClientGoalHandle<NavAction>::SharedPtr &,
+      const std::shared_ptr<const NavAction::Feedback> &feedback) {
+    RCLCPP_INFO(get_logger(), "Distance remaining: %f",
+                feedback->distance_remaining);
+  }
+
+  void navigationResultCallback(
+      const rclcpp_action::ClientGoalHandle<NavAction>::WrappedResult &result) {
+    if (result.goal_id != nav_action_future_goal_handle_.get()->get_goal_id()) {
+      RCLCPP_DEBUG(get_logger(),
+                   "[RESULT] Goal IDs do not match for the current goal handle "
+                   "and received result."
+                   "Ignoring likely due to receiving result for an old goal.");
+      return;
+    }
+
+    switch (result.code) {
+    case rclcpp_action::ResultCode::SUCCEEDED:
+      RCLCPP_INFO(get_logger(),
+                  "[RESULT] Goal result: reached. Still unexplored: %d",
+                  checkGoal());
+      break;
+    case rclcpp_action::ResultCode::ABORTED: {
+      auto bb = frontierToBB(current_goal_, costmap_.getResolution());
+      RCLCPP_ERROR(get_logger(),
+                   "[RESULT] Goal result: aborted, marking as unreachable: "
+                   "x:%f-%f, y: %f-%f Still unexplored: %d",
+                   bb[0], bb[1], bb[2], bb[3], checkGoal());
+      aborted_.push_back(bb);
+    } break;
+    case rclcpp_action::ResultCode::CANCELED:
+      RCLCPP_ERROR(get_logger(),
+                   "[RESULT] Goal result: canceled. Still unexplored: %d",
+                   checkGoal());
+      break;
+    default:
+      RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: Unknown");
+      break;
+    }
+    explore();
+  }
+
   bool checkGoal() {
 
     unsigned int mx, my, free_count = 0;
@@ -398,60 +452,6 @@ private:
     }
 
     return false;
-  }
-
-  void navigationResponseCallback(
-      const rclcpp_action::ClientGoalHandle<NavAction>::SharedPtr
-          &goal_handle) {
-    if (goal_handle) {
-      RCLCPP_INFO(get_logger(), "[RESPONSE] Goal accepted by server.");
-    } else {
-      RCLCPP_ERROR(get_logger(), "[RESPONSE] Goal was rejected by server.");
-      explore();
-    }
-  }
-
-  void navigationFeedbackCallback(
-      const rclcpp_action::ClientGoalHandle<NavAction>::SharedPtr &,
-      const std::shared_ptr<const NavAction::Feedback> &feedback) {
-    RCLCPP_INFO(get_logger(), "Distance remaining: %f",
-                feedback->distance_remaining);
-  }
-
-  void navigationResultCallback(
-      const rclcpp_action::ClientGoalHandle<NavAction>::WrappedResult &result) {
-    if (result.goal_id != nav_action_future_goal_handle_.get()->get_goal_id()) {
-      RCLCPP_DEBUG(get_logger(),
-                   "[RESULT] Goal IDs do not match for the current goal handle "
-                   "and received result."
-                   "Ignoring likely due to receiving result for an old goal.");
-      return;
-    }
-
-    switch (result.code) {
-    case rclcpp_action::ResultCode::SUCCEEDED:
-      RCLCPP_INFO(get_logger(),
-                  "[RESULT] Goal result: reached. Still unexplored: %d",
-                  checkGoal());
-      break;
-    case rclcpp_action::ResultCode::ABORTED: {
-      auto bb = frontierToBB(current_goal_, costmap_.getResolution());
-      RCLCPP_ERROR(get_logger(),
-                   "[RESULT] Goal result: aborted, marking as unreachable: "
-                   "x:%f-%f, y: %f-%f Still unexplored: %d",
-                   bb[0], bb[1], bb[2], bb[3], checkGoal());
-      aborted_.push_back(bb);
-    } break;
-    case rclcpp_action::ResultCode::CANCELED:
-      RCLCPP_ERROR(get_logger(),
-                   "[RESULT] Goal result: canceled. Still unexplored: %d",
-                   checkGoal());
-      break;
-    default:
-      RCLCPP_ERROR(get_logger(), "[RESULT] Goal result: Unknown");
-      break;
-    }
-    explore();
   }
 
   void mapCallback(nav_msgs::msg::OccupancyGrid::UniquePtr occupancyGrid) {
@@ -689,6 +689,7 @@ private:
     }
 
     cheapTSP(positions);
+    
     worldspacePoseSampling(positions);
 
     // drawPositions(positions);
@@ -805,7 +806,7 @@ private:
 
       for (unsigned nbr : nhood8(idx, costmap)) {
 
-        if (!visited_flag[nbr] && costmap.getCost(nbr) < 80 && costmap.getCost(nbr) > 0 /*isCostBorderCell(nbr, occupied_nbr, costmap)*/) {
+        if (!visited_flag[nbr] && costmap.getCost(nbr) < 80 /* && costmap.getCost(nbr) > 0 && isCostBorderCell(nbr, occupied_nbr, costmap)*/) {
           visited_flag[nbr] = true;
           dfs.push(nbr);
         }
@@ -1062,6 +1063,8 @@ private:
       planned[best_next_idx] = true;
       best_dist = 10e10f;
     }
+    
+    positions = positions_sorted;
   }
 
   void worldspacePoseSampling(std::vector<Point> &positions) {
