@@ -1,2 +1,9 @@
 .clangd
 
+install
+log
+build
+
+map*
+
+.vscode

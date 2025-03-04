@@ -1,0 +1,67 @@
+// Copyright (c) 2020 Samsung Research America
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+#ifndef WAYPOINT_PLUGIN_INPUT_OUTPUT_AT_WAYPOINT_HPP_
+#define WAYPOINT_PLUGIN_INPUT_OUTPUT_AT_WAYPOINT_HPP_
+
+#include <memory>
+#include <mutex>
+#include <string>
+
+#include "nav2_core/waypoint_task_executor.hpp"
+#include "rclcpp/rclcpp.hpp"
+#include "rclcpp_lifecycle/lifecycle_node.hpp"
+#include "std_msgs/msg/empty.hpp"
+
+namespace waypoint_plugin {
+
+/**
+ * @brief Simple plugin based on WaypointTaskExecutor, lets robot to wait for a
+ *        user input at waypoint arrival.
+ */
+class InputOutputAtWaypoint : public nav2_core::WaypointTaskExecutor {
+public:
+  InputOutputAtWaypoint();
+
+  ~InputOutputAtWaypoint();
+
+  void initialize(const rclcpp_lifecycle::LifecycleNode::WeakPtr &parent,
+                  const std::string &plugin_name);
+
+  bool processAtWaypoint(const geometry_msgs::msg::PoseStamped &curr_pose,
+                         const int &curr_waypoint_index);
+
+protected:
+
+  void Cb(const std_msgs::msg::Empty::SharedPtr msg);
+
+  bool input_received_;
+  bool is_enabled_;
+  rclcpp::Duration timeout_;
+  
+  rclcpp::Logger logger_{rclcpp::get_logger("waypoint_plugin")};
+  rclcpp::Clock::SharedPtr clock_;
+  
+  std::mutex mutex_;
+
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr subscription_A_;
+  // rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr subscription_B_;
+  // rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr subscription_C_;
+
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr publisher_;
+
+};
+
+} // namespace waypoint_plugin
+
+#endif // namespace waypoint_plugin

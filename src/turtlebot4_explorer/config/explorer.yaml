@@ -1,0 +1,12 @@
+/turtlebot4_explorer:
+  ros__parameters:
+    map_path: "/home/mayerfel/ws/explore_ws/map"
+    min_size: 10
+    min_dist: 1.5
+    map_given: true
+    lower_cost_bound: 1
+    upper_cost_bound: 10
+    coverage_orientations: [0., 180.]
+    # coverage_orientations: [0., 45., 90., 135., 180., 225., 270., 315.]
+    # coverage_orientations: [0.]
+    coverage_pose_distance: 1.
