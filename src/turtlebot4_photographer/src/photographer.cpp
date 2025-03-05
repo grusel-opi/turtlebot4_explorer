@@ -1,5 +1,6 @@
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -15,6 +16,7 @@
 #include "std_msgs/msg/empty.hpp"
 #include "tf2_ros/buffer.h"
 #include <tf2_ros/transform_listener.h>
+#include <vector>
 
 #include "turtlebot4_photographer/util.hpp"
 
@@ -26,39 +28,9 @@ public:
       : Node("turtlebot4_photographer", options) {
     RCLCPP_INFO(get_logger(), "Turtlebot4 photographer startup.");
 
-    curr_frame_msg_A_ = std::make_shared<sensor_msgs::msg::Image>();
-    curr_frame_msg_B_ = std::make_shared<sensor_msgs::msg::Image>();
-    curr_frame_msg_C_ = std::make_shared<sensor_msgs::msg::Image>();
-
     clock_ = get_clock();
 
     declare_parameter("enabled", rclcpp::ParameterValue(true));
-
-    declare_parameter("enable_depth", rclcpp::ParameterValue(true));
-
-    declare_parameter("enabledA", rclcpp::ParameterValue(true));
-
-    declare_parameter("enabledB", rclcpp::ParameterValue(true));
-
-    declare_parameter("enabledC", rclcpp::ParameterValue(true));
-
-    declare_parameter("image_topic_A",
-                      rclcpp::ParameterValue("/oakd/rgb/image_raw"));
-
-    declare_parameter("image_topic_B",
-                      rclcpp::ParameterValue("/camera_B/color/image_raw"));
-
-    declare_parameter("image_topic_C",
-                      rclcpp::ParameterValue("/camera_C/color/image_raw"));
-
-    declare_parameter("depth_topic_A",
-                      rclcpp::ParameterValue("/oakd/stereo/image_raw"));
-
-    declare_parameter("depth_topic_B",
-                      rclcpp::ParameterValue("/camera_B/stereo/image_raw"));
-
-    declare_parameter("depth_topic_C",
-                      rclcpp::ParameterValue("/camera_C/stereo/image_raw"));
 
     declare_parameter("trigger_topic", rclcpp::ParameterValue(
                                            "/input_output_at_waypoint/output"));
@@ -72,34 +44,21 @@ public:
 
     declare_parameter("image_format", rclcpp::ParameterValue("png"));
 
+    declare_parameter("topics",
+                      rclcpp::ParameterValue(std::vector<std::string>()));
+
     std::string save_dir_as_string;
 
     get_parameter("trigger_topic", trigger_topic_);
     get_parameter("enabled", is_enabled_);
-    get_parameter("enable_depth", is_enabled_depth_);
-    get_parameter("enabledA", is_enabled_A_);
-    get_parameter("enabledB", is_enabled_B_);
-    get_parameter("enabledC", is_enabled_C_);
     get_parameter("wait_at_waypoint", wait_at_waypoint_);
-    get_parameter("image_topic_A", image_topic_A_);
-    get_parameter("image_topic_B", image_topic_B_);
-    get_parameter("image_topic_C", image_topic_C_);
-    get_parameter("depth_topic_A", depth_topic_A_);
-    get_parameter("depth_topic_B", depth_topic_B_);
-    get_parameter("depth_topic_C", depth_topic_C_);
     get_parameter("save_dir", save_dir_as_string);
     get_parameter("image_format", image_format_);
     get_parameter("waypoint_pause_duration", waypoint_pause_duration_);
+    get_parameter("topics", image_topics_);
 
     // get inputted save directory and make sure it exists, if not log and
     // create  it
-    save_dir_A_ = save_dir_as_string + "cam_A";
-    save_dir_B_ = save_dir_as_string + "cam_B";
-    save_dir_C_ = save_dir_as_string + "cam_C";
-
-    save_dir_depth_A_ = save_dir_A_ / "cam_A_depth";
-    save_dir_depth_B_ = save_dir_B_ / "cam_B_depth";
-    save_dir_depth_C_ = save_dir_C_ / "cam_C_depth";
 
     RCLCPP_INFO(logger_, "Params:");
 
@@ -107,21 +66,7 @@ public:
 
     RCLCPP_INFO(logger_, "enabled: %d", is_enabled_);
 
-    RCLCPP_INFO(logger_, "enable_depth: %d", is_enabled_depth_);
-
-    RCLCPP_INFO(logger_, "enabledA: %d", is_enabled_A_);
-    RCLCPP_INFO(logger_, "enabledB: %d", is_enabled_B_);
-    RCLCPP_INFO(logger_, "enabledC: %d", is_enabled_C_);
-
     RCLCPP_INFO(logger_, "wait_at_waypoint: %d", wait_at_waypoint_);
-
-    RCLCPP_INFO(logger_, "image_topic_A: %s", image_topic_A_.c_str());
-    RCLCPP_INFO(logger_, "image_topic_B: %s", image_topic_B_.c_str());
-    RCLCPP_INFO(logger_, "image_topic_C: %s", image_topic_C_.c_str());
-
-    RCLCPP_INFO(logger_, "depth_topic_A: %s", depth_topic_A_.c_str());
-    RCLCPP_INFO(logger_, "depth_topic_B: %s", depth_topic_B_.c_str());
-    RCLCPP_INFO(logger_, "depth_topic_C: %s", depth_topic_C_.c_str());
 
     RCLCPP_INFO(logger_, "save_dir: %s", save_dir_as_string.c_str());
 
@@ -129,141 +74,20 @@ public:
     RCLCPP_INFO(logger_, "waypoint_pause_duration: %d",
                 waypoint_pause_duration_);
 
-    try {
-      if (!std::filesystem::exists(save_dir_as_string)) {
-        RCLCPP_WARN(logger_,
-                    "Provided save parent directory for images "
-                    "does not exist,"
-                    "provided directory is: %s, the directory will be created "
-                    "automatically.",
-                    save_dir_as_string.c_str());
-        if (!std::filesystem::create_directory(save_dir_as_string)) {
-          RCLCPP_ERROR(logger_,
-                       "Failed to create directory!: %s required by "
-                       "Turtlebot4_photographer!",
-                       save_dir_as_string.c_str());
-          is_enabled_ = false;
-        }
+    if (!std::filesystem::exists(save_dir_as_string)) {
+      RCLCPP_WARN(logger_,
+                  "Provided save parent directory for images "
+                  "does not exist,"
+                  "provided directory is: %s, the directory will be created "
+                  "automatically.",
+                  save_dir_as_string.c_str());
+      if (!std::filesystem::create_directory(save_dir_as_string)) {
+        RCLCPP_ERROR(logger_,
+                     "Failed to create directory!: %s required by "
+                     "Turtlebot4_photographer!",
+                     save_dir_as_string.c_str());
+        is_enabled_ = false;
       }
-
-      if (is_enabled_A_) {
-        if (!std::filesystem::exists(save_dir_A_)) {
-          RCLCPP_WARN(
-              logger_,
-              "Provided save parent directory for cam A "
-              "does not exist,"
-              "provided directory is: %s, the directory will be created "
-              "automatically.",
-              save_dir_A_.c_str());
-          if (!std::filesystem::create_directory(save_dir_A_)) {
-            RCLCPP_ERROR(logger_,
-                         "Failed to create directory!: %s required by "
-                         "Turtlebot4_photographer!",
-                         save_dir_A_.c_str());
-            is_enabled_A_ = false;
-          }
-        }
-        if (is_enabled_depth_) {
-          if (!std::filesystem::exists(save_dir_depth_A_)) {
-            RCLCPP_WARN(
-                logger_,
-                "Provided save parent directory for cam A depth "
-                "does not exist,"
-                "provided directory is: %s, the directory will be created "
-                "automatically.",
-                save_dir_depth_A_.c_str());
-            if (!std::filesystem::create_directory(save_dir_depth_A_)) {
-              RCLCPP_ERROR(logger_,
-                           "Failed to create directory!: %s required by "
-                           "Turtlebot4_photographer!",
-                           save_dir_depth_A_.c_str());
-              is_enabled_A_ = false;
-            }
-          }
-        }
-      }
-
-      if (is_enabled_B_) {
-        if (!std::filesystem::exists(save_dir_B_)) {
-          RCLCPP_WARN(
-              logger_,
-              "Provided save parent directory for cam B "
-              "does not exist,"
-              "provided directory is: %s, the directory will be created "
-              "automatically.",
-              save_dir_B_.c_str());
-          if (!std::filesystem::create_directory(save_dir_B_)) {
-            RCLCPP_ERROR(logger_,
-                         "Failed to create directory!: %s required by "
-                         "Turtlebot4_photographer!",
-                         save_dir_B_.c_str());
-            is_enabled_ = false;
-          }
-        }
-        if (is_enabled_depth_) {
-          if (!std::filesystem::exists(save_dir_depth_B_)) {
-            RCLCPP_WARN(
-                logger_,
-                "Provided save parent directory for cam A depth "
-                "does not exist,"
-                "provided directory is: %s, the directory will be created "
-                "automatically.",
-                save_dir_depth_B_.c_str());
-            if (!std::filesystem::create_directory(save_dir_depth_B_)) {
-              RCLCPP_ERROR(logger_,
-                           "Failed to create directory!: %s required by "
-                           "Turtlebot4_photographer!",
-                           save_dir_depth_B_.c_str());
-              is_enabled_B_ = false;
-            }
-          }
-        }
-      }
-
-      if (is_enabled_C_) {
-        if (!std::filesystem::exists(save_dir_C_)) {
-          RCLCPP_WARN(
-              logger_,
-              "Provided save parent directory for cam C "
-              "does not exist,"
-              "provided directory is: %s, the directory will be created "
-              "automatically.",
-              save_dir_C_.c_str());
-          if (!std::filesystem::create_directory(save_dir_C_)) {
-            RCLCPP_ERROR(logger_,
-                         "Failed to create directory!: %s required by "
-                         "Turtlebot4_photographer!",
-                         save_dir_C_.c_str());
-            is_enabled_ = false;
-          }
-        }
-        if (is_enabled_depth_) {
-          if (!std::filesystem::exists(save_dir_depth_C_)) {
-            RCLCPP_WARN(
-                logger_,
-                "Provided save parent directory for cam A depth "
-                "does not exist,"
-                "provided directory is: %s, the directory will be created "
-                "automatically.",
-                save_dir_depth_C_.c_str());
-            if (!std::filesystem::create_directory(save_dir_depth_C_)) {
-              RCLCPP_ERROR(logger_,
-                           "Failed to create directory!: %s required by "
-                           "Turtlebot4_photographer!",
-                           save_dir_depth_C_.c_str());
-              is_enabled_C_ = false;
-            }
-          }
-        }
-      }
-    } catch (const std::exception &e) {
-      RCLCPP_ERROR(
-          logger_,
-          "Exception (%s) thrown while attempting to create image capture "
-          "directory."
-          " This task executor is being disabled as it cannot save images.",
-          e.what());
-      is_enabled_ = false;
     }
 
     callback_group_ =
@@ -272,6 +96,32 @@ public:
     rclcpp::SubscriptionOptions sub_options;
     sub_options.callback_group = callback_group_;
 
+    for (unsigned i = 0; i < image_topics_.size(); i++) {
+
+      std::filesystem::path dir = save_dir_as_string + image_topics_[i];
+
+      if (!std::filesystem::exists(dir)) {
+        RCLCPP_WARN(logger_,
+                    "Provided save directory %s, the directory will be created "
+                    "automatically.",
+                    dir.c_str());
+        if (!std::filesystem::create_directory(dir)) {
+          RCLCPP_ERROR(logger_,
+                       "Failed to create directory!: %s required by "
+                       "Turtlebot4_photographer!",
+                       dir.c_str());
+          continue;
+        }
+      }
+
+      subscriptions_.push_back(
+          create_image_subscription(image_topics_[i], sub_options));
+      curr_frame_msgs_.push_back(std::make_shared<sensor_msgs::msg::Image>());
+      save_dirs_.push_back(dir);
+      image_mutexes_.push_back(std::unique_ptr<std::mutex>());
+      topic_to_idx_.insert({image_topics_[i], i});
+    }
+
     trigger_subscriber_ = create_subscription<geometry_msgs::msg::PoseStamped>(
         trigger_topic_, 1,
         std::bind(&Photographer::triggerCallback, this, std::placeholders::_1),
@@ -279,83 +129,20 @@ public:
 
     done_publisher_ = create_publisher<std_msgs::msg::Empty>(
         "/input_output_at_waypoint/input", 10);
+  }
 
-    if (!is_enabled_) {
-      RCLCPP_INFO(logger_, "Photo at waypoint plugin is disabled.");
-    } else {
-      if (is_enabled_A_) {
-        RCLCPP_INFO(logger_, "Subscribing to camera topic %s",
-                    image_topic_A_.c_str());
-
-        camera_image_subscriber_A_ =
-            create_subscription<sensor_msgs::msg::Image>(
-                image_topic_A_, rclcpp::SystemDefaultsQoS(),
-                std::bind(&Photographer::imageCallbackA, this,
-                          std::placeholders::_1),
-                sub_options);
-        if (is_enabled_depth_) {
-          RCLCPP_INFO(logger_, "Subscribing to depth topic %s",
-                      depth_topic_A_.c_str());
-
-          camera_depth_subscriber_A_ =
-              create_subscription<sensor_msgs::msg::Image>(
-                  depth_topic_A_, rclcpp::SystemDefaultsQoS(),
-                  std::bind(&Photographer::depthCallbackA, this,
-                            std::placeholders::_1),
-                  sub_options);
-        }
-      }
-
-      if (is_enabled_B_) {
-        RCLCPP_INFO(logger_,
-                    "Initializing photo at waypoint plugin, subscribing to "
-                    "camera topic %s",
-                    image_topic_B_.c_str());
-
-        camera_image_subscriber_B_ =
-            create_subscription<sensor_msgs::msg::Image>(
-                image_topic_B_, rclcpp::SystemDefaultsQoS(),
-                std::bind(&Photographer::imageCallbackB, this,
-                          std::placeholders::_1),
-                sub_options);
-        if (is_enabled_depth_) {
-          RCLCPP_INFO(logger_, "Subscribing to depth topic %s",
-                      depth_topic_B_.c_str());
-
-          camera_depth_subscriber_B_ =
-              create_subscription<sensor_msgs::msg::Image>(
-                  depth_topic_B_, rclcpp::SystemDefaultsQoS(),
-                  std::bind(&Photographer::depthCallbackB, this,
-                            std::placeholders::_1),
-                  sub_options);
-        }
-      }
-
-      if (is_enabled_C_) {
-        RCLCPP_INFO(logger_,
-                    "Initializing photo at waypoint plugin, subscribing to "
-                    "camera topic %s",
-                    image_topic_C_.c_str());
-
-        camera_image_subscriber_C_ =
-            create_subscription<sensor_msgs::msg::Image>(
-                image_topic_C_, rclcpp::SystemDefaultsQoS(),
-                std::bind(&Photographer::imageCallbackC, this,
-                          std::placeholders::_1),
-                sub_options);
-        if (is_enabled_depth_) {
-          RCLCPP_INFO(logger_, "Subscribing to depth topic %s",
-                      depth_topic_C_.c_str());
-
-          camera_depth_subscriber_C_ =
-              create_subscription<sensor_msgs::msg::Image>(
-                  depth_topic_C_, rclcpp::SystemDefaultsQoS(),
-                  std::bind(&Photographer::depthCallbackC, this,
-                            std::placeholders::_1),
-                  sub_options);
-        }
-      }
-    }
+  std::shared_ptr<rclcpp::Subscription<sensor_msgs::msg::Image>>
+  create_image_subscription(const std::string &topic_name,
+                            rclcpp::SubscriptionOptions sub_options) {
+    auto subscription = create_subscription<sensor_msgs::msg::Image>(
+        topic_name, rclcpp::SystemDefaultsQoS(),
+        [this, topic_name](sensor_msgs::msg::Image::SharedPtr msg) {
+          unsigned idx = topic_to_idx_.find(topic_name)->second;
+          std::lock_guard<std::mutex> guard(*image_mutexes_[idx]);
+          curr_frame_msgs_[idx] = msg;
+        },
+        sub_options);
+    return subscription;
   }
 
   void triggerCallback(const geometry_msgs::msg::PoseStamped &curr_pose) {
@@ -374,197 +161,36 @@ public:
 
     quat_to_euler(curr_pose.pose.orientation, euler);
 
-    if (is_enabled_A_) {
+    for (unsigned i = 0; i < image_topics_.size(); i++) {
+
       try {
-        std::filesystem::path file_name_A =
-            curr_frame_msg_A_->header.frame_id + "+" +
+
+        std::filesystem::path file_name =
+            curr_frame_msgs_[i]->header.frame_id + "+" +
             std::to_string(curr_pose.pose.position.x) + "+" +
             std::to_string(curr_pose.pose.position.y) + "+" +
-            std::to_string(euler[2]) + "+" + "." + image_format_;
-        std::filesystem::path full_path_image_path_A =
-            save_dir_A_ / file_name_A;
+            std::to_string(euler[2]) + "." + image_format_;
 
-        std::lock_guard<std::mutex> guard(image_mutex_A_);
-        cv::Mat curr_frame_mat_A;
-        deepCopyMsg2Mat(curr_frame_msg_A_, curr_frame_mat_A);
-        cv::imwrite(full_path_image_path_A.c_str(), curr_frame_mat_A);
+        std::filesystem::path full_path = save_dirs_[i] / file_name;
+        std::lock_guard<std::mutex> guard(*image_mutexes_[i]);
 
-      } catch (const std::exception &e) {
-        RCLCPP_ERROR(
-            logger_,
-            "Couldn't take photo at waypoint! Caught exception: %s \n"
-            "Make sure that the image topic named: %s is valid and active!",
-            e.what(), image_topic_A_.c_str());
-      }
-
-      if (is_enabled_depth_) {
-        try {
-          std::filesystem::path file_depth_name_A =
-              curr_depth_frame_msg_A_->header.frame_id + "+" + "stereo" + "+" +
-              std::to_string(curr_pose.pose.position.x) + "+" +
-              std::to_string(curr_pose.pose.position.y) + "+" +
-              std::to_string(euler[2]) + "+" + "." + image_format_;
-          std::filesystem::path full_path_depth_path_A =
-              save_dir_depth_A_ / file_depth_name_A;
-
-          std::lock_guard<std::mutex> guard(depth_mutex_A_);
-          cv::Mat curr_depth_frame_mat_A;
-          deepCopyMsg2Mat(curr_depth_frame_msg_A_, curr_depth_frame_mat_A);
-          cv::imwrite(full_path_depth_path_A.c_str(), curr_depth_frame_mat_A);
-
-        } catch (const std::exception &e) {
-          RCLCPP_ERROR(
-              logger_,
-              "Couldn't take photo at waypoint! Caught exception: %s \n"
-              "Make sure that the image topic named: %s is valid and active!",
-              e.what(), image_topic_A_.c_str());
-        }
-      }
-    }
-
-    if (is_enabled_B_) {
-      try {
-        std::filesystem::path file_name_B =
-            curr_frame_msg_B_->header.frame_id + "+" +
-            std::to_string(curr_pose.pose.position.x) + "+" +
-            std::to_string(curr_pose.pose.position.y) + "+" +
-            std::to_string(euler[2]) + "+" + "." + image_format_;
-        std::filesystem::path full_path_image_path_B =
-            save_dir_B_ / file_name_B;
-
-        std::lock_guard<std::mutex> guard(image_mutex_B_);
-        cv::Mat curr_frame_mat_B;
-        deepCopyMsg2Mat(curr_frame_msg_B_, curr_frame_mat_B);
-        cv::imwrite(full_path_image_path_B.c_str(), curr_frame_mat_B);
+        cv::Mat curr_frame_mat;
+        deepCopyMsg2Mat(curr_frame_msgs_[i], curr_frame_mat);
+        cv::imwrite(full_path.c_str(), curr_frame_mat);
 
       } catch (const std::exception &e) {
-        RCLCPP_ERROR(
-            logger_,
-            "Couldn't take photo at waypoint! Caught exception: %s \n"
-            "Make sure that the image topic named: %s is valid and active!",
-            e.what(), image_topic_B_.c_str());
+        RCLCPP_ERROR(logger_,
+                     "Couldn't take photo at waypoint! Caught exception: %s "
+                     "with topic %s",
+                     e.what(), image_topics_[i].c_str());
       }
 
-      if (is_enabled_depth_) {
-        try {
-          std::filesystem::path file_depth_name_B =
-              curr_depth_frame_msg_B_->header.frame_id + "+" + "stereo" + "+" +
-              std::to_string(curr_pose.pose.position.x) + "+" +
-              std::to_string(curr_pose.pose.position.y) + "+" +
-              std::to_string(euler[2]) + "+" + "." + image_format_;
-          std::filesystem::path full_path_depth_path_B =
-              save_dir_depth_B_ / file_depth_name_B;
+      RCLCPP_INFO(logger_, "Photos have been taken sucessfully at waypoint");
 
-          std::lock_guard<std::mutex> guard(depth_mutex_B_);
-          cv::Mat curr_depth_frame_mat_B;
-          deepCopyMsg2Mat(curr_depth_frame_msg_B_, curr_depth_frame_mat_B);
-          cv::imwrite(full_path_depth_path_B.c_str(), curr_depth_frame_mat_B);
+      std_msgs::msg::Empty done_trigger;
 
-        } catch (const std::exception &e) {
-          RCLCPP_ERROR(
-              logger_,
-              "Couldn't take photo at waypoint! Caught exception: %s \n"
-              "Make sure that the image topic named: %s is valid and active!",
-              e.what(), image_topic_B_.c_str());
-        }
-      }
+      done_publisher_->publish(done_trigger);
     }
-
-    if (is_enabled_C_) {
-      try {
-        std::filesystem::path file_name_C =
-            curr_frame_msg_C_->header.frame_id + "+" +
-            std::to_string(curr_pose.pose.position.x) + "+" +
-            std::to_string(curr_pose.pose.position.y) + "+" +
-            std::to_string(euler[2]) + "+" + "." + image_format_;
-        std::filesystem::path full_path_image_path_C =
-            save_dir_C_ / file_name_C;
-
-        std::lock_guard<std::mutex> guard(image_mutex_C_);
-        cv::Mat curr_frame_mat_C;
-        deepCopyMsg2Mat(curr_frame_msg_C_, curr_frame_mat_C);
-        cv::imwrite(full_path_image_path_C.c_str(), curr_frame_mat_C);
-
-      } catch (const std::exception &e) {
-        RCLCPP_ERROR(
-            logger_,
-            "Couldn't take photo at waypoint! Caught exception: %s \n"
-            "Make sure that the image topic named: %s is valid and active!",
-            e.what(), image_topic_C_.c_str());
-      }
-
-       if (is_enabled_depth_) {
-        try {
-          std::filesystem::path file_depth_name_C =
-              curr_depth_frame_msg_C_->header.frame_id + "+" + "stereo" + "+" +
-              std::to_string(curr_pose.pose.position.x) + "+" +
-              std::to_string(curr_pose.pose.position.y) + "+" +
-              std::to_string(euler[2]) + "+" + "." + image_format_;
-          std::filesystem::path full_path_depth_path_C =
-              save_dir_depth_C_ / file_depth_name_C;
-
-          std::lock_guard<std::mutex> guard(depth_mutex_C_);
-          cv::Mat curr_depth_frame_mat_C;
-          deepCopyMsg2Mat(curr_depth_frame_msg_C_, curr_depth_frame_mat_C);
-          cv::imwrite(full_path_depth_path_C.c_str(), curr_depth_frame_mat_C);
-
-        } catch (const std::exception &e) {
-          RCLCPP_ERROR(
-              logger_,
-              "Couldn't take photo at waypoint! Caught exception: %s \n"
-              "Make sure that the image topic named: %s is valid and active!",
-              e.what(), image_topic_C_.c_str());
-        }
-      }
-    }
-
-    RCLCPP_INFO(logger_, "Photos have been taken sucessfully at waypoint");
-
-    std_msgs::msg::Empty done_trigger;
-
-    done_publisher_->publish(done_trigger);
-  }
-
-  void imageCallbackA(const sensor_msgs::msg::Image::SharedPtr msg) {
-    // RCLCPP_INFO(logger_, "Got a new image with sec stamp %i!",
-    // msg->header.stamp.sec);
-    std::lock_guard<std::mutex> guard(image_mutex_A_);
-    curr_frame_msg_A_ = msg;
-  }
-
-  void imageCallbackB(const sensor_msgs::msg::Image::SharedPtr msg) {
-    // RCLCPP_INFO(logger_, "Got a new image with sec stamp %i!",
-    // msg->header.stamp.sec);
-    std::lock_guard<std::mutex> guard(image_mutex_B_);
-    curr_frame_msg_B_ = msg;
-  }
-
-  void imageCallbackC(const sensor_msgs::msg::Image::SharedPtr msg) {
-    // RCLCPP_INFO(logger_, "Got a new image with sec stamp %i!",
-    // msg->header.stamp.sec);
-    std::lock_guard<std::mutex> guard(image_mutex_C_);
-    curr_frame_msg_C_ = msg;
-  }
-
-  void depthCallbackA(const sensor_msgs::msg::Image::SharedPtr msg) {
-    // RCLCPP_INFO(logger_, "Got a new image with sec stamp %i!",
-    // msg->header.stamp.sec);
-    std::lock_guard<std::mutex> guard(depth_mutex_A_);
-    curr_depth_frame_msg_A_ = msg;
-  }
-
-  void depthCallbackB(const sensor_msgs::msg::Image::SharedPtr msg) {
-    // RCLCPP_INFO(logger_, "Got a new image with sec stamp %i!",
-    // msg->header.stamp.sec);
-    std::lock_guard<std::mutex> guard(depth_mutex_B_);
-    curr_depth_frame_msg_B_ = msg;
-  }
-
-  void depthCallbackC(const sensor_msgs::msg::Image::SharedPtr msg) {
-    // RCLCPP_INFO(logger_, "Got a new image with sec stamp %i!",
-    // msg->header.stamp.sec);
-    std::lock_guard<std::mutex> guard(depth_mutex_C_);
-    curr_depth_frame_msg_C_ = msg;
   }
 
   void deepCopyMsg2Mat(const sensor_msgs::msg::Image::SharedPtr &msg,
@@ -588,61 +214,23 @@ private:
   rclcpp::Clock::SharedPtr clock_;
 
   bool wait_at_waypoint_;
+
   int waypoint_pause_duration_;
 
   bool is_enabled_;
 
-  bool is_enabled_depth_;
+  std::vector<std::string> image_topics_;
 
-  bool is_enabled_A_;
-  bool is_enabled_B_;
-  bool is_enabled_C_;
+  std::unordered_map<std::string, unsigned> topic_to_idx_;
 
-  std::mutex image_mutex_A_;
-  std::mutex image_mutex_B_;
-  std::mutex image_mutex_C_;
+  std::vector<std::filesystem::path> save_dirs_;
 
-  std::mutex depth_mutex_A_;
-  std::mutex depth_mutex_B_;
-  std::mutex depth_mutex_C_;
+  std::vector<rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr>
+      subscriptions_;
 
-  std::filesystem::path save_dir_A_;
-  std::filesystem::path save_dir_B_;
-  std::filesystem::path save_dir_C_;
+  std::vector<sensor_msgs::msg::Image::SharedPtr> curr_frame_msgs_;
 
-  std::filesystem::path save_dir_depth_A_;
-  std::filesystem::path save_dir_depth_B_;
-  std::filesystem::path save_dir_depth_C_;
-
-  std::string image_topic_A_;
-  std::string image_topic_B_;
-  std::string image_topic_C_;
-
-  std::string depth_topic_A_;
-  std::string depth_topic_B_;
-  std::string depth_topic_C_;
-
-  sensor_msgs::msg::Image::SharedPtr curr_frame_msg_A_;
-  sensor_msgs::msg::Image::SharedPtr curr_frame_msg_B_;
-  sensor_msgs::msg::Image::SharedPtr curr_frame_msg_C_;
-
-  sensor_msgs::msg::Image::SharedPtr curr_depth_frame_msg_A_;
-  sensor_msgs::msg::Image::SharedPtr curr_depth_frame_msg_B_;
-  sensor_msgs::msg::Image::SharedPtr curr_depth_frame_msg_C_;
-
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
-      camera_image_subscriber_A_;
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
-      camera_image_subscriber_B_;
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
-      camera_image_subscriber_C_;
-
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
-      camera_depth_subscriber_A_;
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
-      camera_depth_subscriber_B_;
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr
-      camera_depth_subscriber_C_;
+  std::vector<std::unique_ptr<std::mutex>> image_mutexes_;
 
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr done_publisher_;
 
