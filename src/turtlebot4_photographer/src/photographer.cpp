@@ -1,3 +1,4 @@
+#include <cstddef>
 #include <exception>
 #include <filesystem>
 #include <memory>
@@ -74,6 +75,11 @@ public:
     RCLCPP_INFO(logger_, "waypoint_pause_duration: %d",
                 waypoint_pause_duration_);
 
+    RCLCPP_INFO(logger_, "topics:");
+    for (const auto &t : image_topics_) {
+      RCLCPP_INFO(logger_, "%s", t.c_str());
+    }
+
     if (!std::filesystem::exists(save_dir_as_string)) {
       RCLCPP_WARN(logger_,
                   "Provided save parent directory for images "
@@ -96,6 +102,8 @@ public:
     rclcpp::SubscriptionOptions sub_options;
     sub_options.callback_group = callback_group_;
 
+    image_mutexes_ = std::vector<std::mutex>((size_t) image_topics_.size());
+
     for (unsigned i = 0; i < image_topics_.size(); i++) {
 
       std::filesystem::path dir = save_dir_as_string + image_topics_[i];
@@ -105,7 +113,7 @@ public:
                     "Provided save directory %s, the directory will be created "
                     "automatically.",
                     dir.c_str());
-        if (!std::filesystem::create_directory(dir)) {
+        if (!std::filesystem::create_directories(dir)) {
           RCLCPP_ERROR(logger_,
                        "Failed to create directory!: %s required by "
                        "Turtlebot4_photographer!",
@@ -118,7 +126,6 @@ public:
           create_image_subscription(image_topics_[i], sub_options));
       curr_frame_msgs_.push_back(std::make_shared<sensor_msgs::msg::Image>());
       save_dirs_.push_back(dir);
-      image_mutexes_.push_back(std::unique_ptr<std::mutex>());
       topic_to_idx_.insert({image_topics_[i], i});
     }
 
@@ -129,6 +136,8 @@ public:
 
     done_publisher_ = create_publisher<std_msgs::msg::Empty>(
         "/input_output_at_waypoint/input", 10);
+
+    RCLCPP_INFO(logger_, "Photographer ready!");
   }
 
   std::shared_ptr<rclcpp::Subscription<sensor_msgs::msg::Image>>
@@ -138,10 +147,11 @@ public:
         topic_name, rclcpp::SystemDefaultsQoS(),
         [this, topic_name](sensor_msgs::msg::Image::SharedPtr msg) {
           unsigned idx = topic_to_idx_.find(topic_name)->second;
-          std::lock_guard<std::mutex> guard(*image_mutexes_[idx]);
+          std::lock_guard<std::mutex> guard(image_mutexes_[idx]);
           curr_frame_msgs_[idx] = msg;
         },
         sub_options);
+    RCLCPP_INFO(logger_, "subscibed to topic: %s", topic_name.c_str());
     return subscription;
   }
 
@@ -172,11 +182,13 @@ public:
             std::to_string(euler[2]) + "." + image_format_;
 
         std::filesystem::path full_path = save_dirs_[i] / file_name;
-        std::lock_guard<std::mutex> guard(*image_mutexes_[i]);
+        std::lock_guard<std::mutex> guard(image_mutexes_[i]);
 
         cv::Mat curr_frame_mat;
         deepCopyMsg2Mat(curr_frame_msgs_[i], curr_frame_mat);
         cv::imwrite(full_path.c_str(), curr_frame_mat);
+
+        RCLCPP_INFO(logger_, "Took photo from topic %s", image_topics_[i].c_str());
 
       } catch (const std::exception &e) {
         RCLCPP_ERROR(logger_,
@@ -230,7 +242,7 @@ private:
 
   std::vector<sensor_msgs::msg::Image::SharedPtr> curr_frame_msgs_;
 
-  std::vector<std::unique_ptr<std::mutex>> image_mutexes_;
+  std::vector<std::mutex> image_mutexes_;
 
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr done_publisher_;
 

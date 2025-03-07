@@ -44,6 +44,7 @@ public:
                           0., 45., 90., 135., 180., 225., 270., 315.}));
     declare_parameter("use_amcl", rclcpp::ParameterValue(true));
     declare_parameter("do_exploration", rclcpp::ParameterValue(false));
+    declare_parameter("do_acquisition", rclcpp::ParameterValue(true));
     declare_parameter("freespace_star_poses", rclcpp::ParameterValue(false));
 
     get_parameter("map_path", map_path_);
@@ -53,6 +54,7 @@ public:
     get_parameter("coverage_orientations", coverage_orientations_deg_);
     get_parameter("use_amcl", use_amcl_);
     get_parameter("do_exploration", do_exploration_);
+    get_parameter("do_acquisition", do_acquisition_);
     get_parameter("freespace_star_poses", freespace_star_poses_);
 
     RCLCPP_INFO(get_logger(), "map_path: %s", map_path_.c_str());
@@ -64,6 +66,7 @@ public:
                 coverage_orientations_deg_.size());
     RCLCPP_INFO(get_logger(), "use_amcl: %d", use_amcl_);
     RCLCPP_INFO(get_logger(), "do_exploration: %d", do_exploration_);
+    RCLCPP_INFO(get_logger(), "do_acquisition: %d", do_acquisition_);
     RCLCPP_INFO(get_logger(), "freespace_star_poses: %d",
                 freespace_star_poses_);
 
@@ -161,6 +164,7 @@ private:
 
   bool use_amcl_;
   bool do_exploration_;
+  bool do_acquisition_;
   bool freespace_star_poses_;
 
   std::string map_path_;
@@ -652,7 +656,9 @@ private:
 
       saveMap();
       clearMarkers();
-      calculateCoverage();
+      if (do_acquisition_) {
+        calculateCoverage();
+      }
     };
 
     RCLCPP_INFO(get_logger(), "Sending return to home goal %f,%f",
@@ -690,13 +696,15 @@ private:
       return;
     }
 
-    cheapTSP(positions);
-
-    worldspacePoseSampling(positions);
-
     if (freespace_star_poses_) {
-      //executeStarPatternCoverageViaWaypoints(positions);
+      worldspacePoseSampling(positions);
+      cheapTSP(positions);
+      buildStarPattern(positions);
+      drawPoses(waypoint_poses_);
+      executeStarPatternCoverageViaWaypoints();
     } else {
+      cheapTSP(positions);
+      worldspacePoseSampling(positions);
       backAndForthOrdering(positions);
       positionToPathPoses(positions);
       drawPoses(coverage_poses_);
@@ -803,7 +811,7 @@ private:
     return true;
   }
 
-  void executeStarPatternCoverageViaWaypoints(std::vector<Point> &positions) {
+  void buildStarPattern(std::vector<Point> &positions) {
 
     for (const auto &p : positions) {
       for (const auto &o : coverage_orientations_deg_) {
@@ -818,6 +826,9 @@ private:
         waypoint_poses_.push_back(waypoint_pose);
       }
     }
+  }
+
+  void executeStarPatternCoverageViaWaypoints() {
 
     auto goal = WaypointAction::Goal();
     goal.poses = waypoint_poses_;
@@ -1052,7 +1063,6 @@ private:
     }
 
     positions = positions_sorted;
-
   }
 
   void worldspacePoseSampling(std::vector<Point> &positions) {
@@ -1062,11 +1072,26 @@ private:
     positions_sampled.push_back(current_pos);
 
     for (unsigned i = 1; i < positions.size(); i++) {
+
       double tmp_dist = std::sqrt(std::pow(current_pos.x - positions[i].x, 2) +
                                   std::pow(current_pos.y - positions[i].y, 2));
+
       if (tmp_dist > coverage_step_size_w_) {
-        positions_sampled.push_back(positions[i]);
-        current_pos = positions[i];
+
+        double min_dist_to_others = 10e10;
+        for (unsigned j = 0; j < positions_sampled.size(); j++) {
+          double tmp_min_dist_to_others =
+              std::sqrt(std::pow(positions[i].x - positions_sampled[j].x, 2) +
+                        std::pow(positions[i].y - positions_sampled[j].y, 2));
+          if (tmp_min_dist_to_others < min_dist_to_others) {
+            min_dist_to_others = tmp_min_dist_to_others;
+          }
+        }
+
+        if (min_dist_to_others > coverage_step_size_w_) {
+          positions_sampled.push_back(positions[i]);
+          current_pos = positions[i];
+        }
       }
     }
 

@@ -1,16 +1,9 @@
 /turtlebot4_photographer:
   ros__parameters:
     enabled: True
-    enabledA: True
-    enabledB: True
-    enabledC: True
-    image_topic_A: "/oakd/rgb/image_raw"
-    image_topic_B: "/oakd_cam_B/rgb/image_raw"
-    image_topic_C: "/oakd_cam_C/rgb/image_raw"
-    depth_topic_A: "/oakd/stereo/image_raw"
-    depth_topic_B: "/oakd_cam_B/stereo/image_raw"
-    depth_topic_C: "/oakd_cam_C/stereo/image_raw"
-    save_dir: "/home/mayerfel/data/waypoint_images/"
     image_format: "png"
-    waypoint_pause_duration: 3000
+    waypoint_pause_duration: 5000
+    wait_at_waypoint: true
+    save_dir: "/home/mayerfel/data/waypoint_images/run0"
+    topics: ["/oakd/stereo/image_raw", "/oakd/right/image_raw", "/oakd/left/image_raw", "/oakd/rgb/image_raw", "/oakd_cam_B/stereo/image_raw", "/oakd_cam_B/right/image_raw", "/oakd_cam_B/left/image_raw", "/oakd_cam_B/rgb/image_raw", "/oakd_cam_C/stereo/image_raw", "/oakd_cam_C/right/image_raw", "/oakd_cam_C/left/image_raw", "/oakd_cam_C/rgb/image_raw"]
 

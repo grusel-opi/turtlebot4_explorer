@@ -6,6 +6,7 @@
     map_given: true
     use_amcl: true
     do_exploration: false
-    freespace_star_poses: false
+    do_acquisition: true
+    freespace_star_poses: true
     coverage_orientations: [0., 45., 90., 135., 180., 225., 270., 315.]
     coverage_pose_distance: 1.
