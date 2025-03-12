@@ -691,20 +691,20 @@ private:
 
     std::vector<Point> positions;
 
-    if (!costmapWalkSampling(positions)) {
+    if (!costmapSampling(positions)) {
       RCLCPP_ERROR(get_logger(), "Error calculating coverage poses!");
       return;
     }
 
     if (freespace_star_poses_) {
-      worldspacePoseSampling(positions);
-      cheapTSP(positions);
-      buildStarPattern(positions);
+      worldspaceSampling(positions);
+      approximateTSP(positions);
+      buildStarPoses(positions);
       drawPoses(waypoint_poses_);
       executeStarPatternCoverageViaWaypoints();
     } else {
-      cheapTSP(positions);
-      worldspacePoseSampling(positions);
+      approximateTSP(positions);
+      worldspaceSampling(positions);
       backAndForthOrdering(positions);
       positionToPathPoses(positions);
       drawPoses(coverage_poses_);
@@ -712,9 +712,9 @@ private:
     }
   }
 
-  bool costmapWalkSampling(std::vector<Point> &positions) {
+  bool costmapSampling(std::vector<Point> &positions) {
 
-    RCLCPP_INFO(get_logger(), "[costmapWalkSampling]");
+    RCLCPP_INFO(get_logger(), "[costmapSampling]");
 
     auto request = std::make_shared<nav2_msgs::srv::GetCostmap::Request>();
 
@@ -805,13 +805,13 @@ private:
         }
       }
     }
-    RCLCPP_INFO(get_logger(), "[costmapWalkSampling]: found %lu positions",
+    RCLCPP_INFO(get_logger(), "[costmapSampling]: found %lu positions",
                 positions.size());
 
     return true;
   }
 
-  void buildStarPattern(std::vector<Point> &positions) {
+  void buildStarPoses(std::vector<Point> &positions) {
 
     for (const auto &p : positions) {
       for (const auto &o : coverage_orientations_deg_) {
@@ -1020,12 +1020,12 @@ private:
     positions = back_and_forth;
   }
 
-  void cheapTSP(std::vector<Point> &positions) {
+  void approximateTSP(std::vector<Point> &positions) {
 
-    RCLCPP_INFO(get_logger(), "[cheapTSP]");
+    RCLCPP_INFO(get_logger(), "[approximateTSP]");
 
     if (positions.size() == 0) {
-      RCLCPP_ERROR(get_logger(), "[cheapTSP] positions empty");
+      RCLCPP_ERROR(get_logger(), "[approximateTSP] positions empty");
       return;
     }
 
@@ -1065,7 +1065,7 @@ private:
     positions = positions_sorted;
   }
 
-  void worldspacePoseSampling(std::vector<Point> &positions) {
+  void worldspaceSampling(std::vector<Point> &positions) {
     std::vector<Point> positions_sampled;
 
     Point current_pos = positions[0];
@@ -1099,7 +1099,7 @@ private:
 
     RCLCPP_INFO(
         get_logger(),
-        "[worldspacePoseSampling]: using %lu of %lu positions for coverage",
+        "[worldspaceSampling]: using %lu of %lu positions for coverage",
         positions_sampled.size(), positions.size());
   }
 
@@ -1115,8 +1115,6 @@ private:
       double x = positions[i + 1].x - positions[i].x;
       double y = positions[i + 1].y - positions[i].y;
       double yaw = std::atan2(y, x);
-
-      // RCLCPP_INFO(get_logger(), "[positionToPathPoses] yaw: %f", yaw);
 
       geometry_msgs::msg::Quaternion q_msg;
       tf2::Quaternion q;
