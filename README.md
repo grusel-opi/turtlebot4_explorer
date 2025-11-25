@@ -15,6 +15,8 @@ This workspace contains four ROS 2 packages:
 - ### turtlebot4_photographer
 - ### waypoint_plugin
 - ### waypoint_nav
+- ### imu_estimator
+  ROS 2 node subscribing to oakd IMU messages to estimate the orientation of the camera. Usefull to automatically change the URDF of the robot after mounting the camera in a different orientation. Uses the Madgwick AHRS-filter for estimation and prints euler angles.
 
 
 
