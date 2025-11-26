@@ -16,7 +16,8 @@ This workspace contains four ROS 2 packages:
 - ### waypoint_plugin
 - ### waypoint_nav
 - ### imu_estimator
-  ROS 2 node subscribing to oakd IMU messages to estimate the orientation of the camera. Usefull to automatically change the URDF of the robot after mounting the camera in a different orientation. Uses the Madgwick AHRS-filter for estimation and prints euler angles.
+  This is a ROS 2 node that subscribes to the oakd IMU messages in order to estimate the camera's orientation. This is useful for automatically changing the URDF of the robot after mounting the camera at a different angle.
+  It uses the [Madgwick AHRS filter](https://ahrs.readthedocs.io/en/latest/filters/madgwick.html) for estimation and prints Euler angles..
 
 
 
