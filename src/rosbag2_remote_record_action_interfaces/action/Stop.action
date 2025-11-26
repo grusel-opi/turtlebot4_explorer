@@ -1,0 +1,8 @@
+# Request
+---
+# Result
+string stdout
+string stderr 
+---
+# Feedback
+string status

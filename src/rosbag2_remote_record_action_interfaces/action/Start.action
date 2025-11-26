@@ -1,0 +1,9 @@
+# Request
+string topics
+---
+# Result
+string stdout
+string stderr 
+---
+# Feedback
+string status
